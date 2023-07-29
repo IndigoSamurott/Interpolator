@@ -22,6 +22,8 @@ def get_optical_flow(cap):
         
        
         # make frames gray
+        # graph the frames
+        
         # get Lucas Kanade feature paramters for frames
         # calculate optical flow
 
