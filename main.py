@@ -12,51 +12,75 @@
 
 import cv2
 
-
 def get_optical_flow(cap):
 
-    #get data for VideoWriter
-    fps = int(cap.get(cv2.CAP_PROP_FPS))
-    fWidth = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    fHeight = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    # get first frame
+    successfully_read, frame = cap.read()
+    prev_grey_frame = None
 
-    #create VideoWriter object
-    out = cv2.VideoWriter('grey.mp4', cv2.VideoWriter_fourcc(*'mp4v'), fps, (fWidth, fHeight), isColor=False)
+    if successfully_read:
+        prev_grey_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
+    # Parameters for Lucas Kanade optical flow
+    # TODO see other parameters lk can take
+    lucas_kanade_params = dict(
+        winSize=(15, 15), 
+        maxLevel=2,
+        criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03),
+    )
 
-    # get frames
+    optical_flow_frames = {
+        "corner_points": [],
+        "status": [],
+        "err": []
+        }
+
     while True:
+        # corners we're tracking from
+        prev_corner_points = cv2.goodFeaturesToTrack(prev_grey_frame,
+                                     maxCorners=200,
+                                     qualityLevel=0.01,
+                                     minDistance=30,
+                                     blockSize=3)
+        
+        # get next frame and convert to grey
         successfully_read, frame = cap.read()
         if not successfully_read:
             break
+        grey_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        #make grey
-        greyVer = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        #tests
-        print(greyVer)
-        print(greyVer[100][200])
-        out.write(greyVer)
-       
-    out.release()
-    cap.release()
-        # graph the frames
+        # TODO do this mathematically
+        corner_points, status, err = cv2.calcOpticalFlowPyrLK(
+            prev_grey_frame, grey_frame, prev_corner_points, None, **lucas_kanade_params
+        )
+
+        optical_flow_frames['corner_points'].append(corner_points)
+        optical_flow_frames['status'].append(status)
+        optical_flow_frames['err'].append(err)
         
-        # get Lucas Kanade feature paramters for frames
-        # calculate optical flow
+        prev_grey_frame = grey_frame.copy()
+    
+    return optical_flow_frames
+        
 
 
 def main():
     # TODO: read video
     file_name = "example.mp4"
     cap = cv2.VideoCapture(file_name)
-    optical_flow = get_optical_flow(cap)
+    optical_flow_frames = get_optical_flow(cap)
+    
+    # TODO: mathematically derive optical flow
+    # TODO: we need to use optical flow to interpolate frames
+    
     
 
 
     # average frames
     # write video
-    pass
+    
+    cap.release()
 
 
 
