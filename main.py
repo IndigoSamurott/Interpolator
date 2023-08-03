@@ -11,6 +11,52 @@
 # extrapolation is a process of generating new data points outside the range of a discrete set of known data points
 
 import cv2
+import numpy as np
+
+def convolution2D(window, kernel):
+    convolution = 0
+    for i in range(len(window)):
+        for j in range(len(window[0])):
+            convolution += window[i][j] * kernel[i][j]
+    return convolution
+
+def gradient(grey_frame, kernel):
+    kernel = [[-1, 0, 1], 
+              [-2, 0, 2], 
+              [-1, 0, 1]]
+    grey_frame = np.array([
+                  [1, 2, 3, 4, 5 ], 
+                  [6, 7, 8, 9, 10], 
+                  [11,12,13,14,15],
+                  [16,17,18,19,20],
+                  [21,22,23,24,25]
+                  ])
+    
+    offset = len(kernel) // 2
+    # TODO: make sure this is correct (check the size of the gradient image)
+    gradient_image = np.zeros((len(grey_frame), len(grey_frame[0])))
+
+    for x in range(offset, len(grey_frame[0])-offset):
+        for y in range(offset, len(grey_frame)-offset):
+            window = grey_frame[x-offset:x+offset+1, y-offset:y+offset+1]
+            convolution = convolution2D(window, kernel)
+            # TODO: add convolution to gradient image
+    
+    return gradient_image
+            
+
+def good_features_to_track(prev_grey_frame, max_corners=200, quality_level=0.01, min_distance=30, blockSize=3):
+    # 1. calculate flow derivatives for x and y and also t using sobel operator
+    # TODO: use sobel operator and make kernel array
+    I_x = gradient(prev_grey_frame, kernel_x)
+    I_y = gradient(prev_grey_frame, kernel_y)
+    # 2. calculate Ix^2, Iy^2, IxIy, IxIt, IyIt
+    # 3. sum squared derivatives in a window
+    # 4. construct Harris matrix
+    # 5. calculate Response function
+    # 6. apply threshold to Response function
+    pass
+
 
 def get_optical_flow(cap):
 
@@ -18,6 +64,7 @@ def get_optical_flow(cap):
     successfully_read, frame = cap.read()
     prev_grey_frame = None
 
+    # TODO: convert to grey manually as well
     if successfully_read:
         prev_grey_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
@@ -86,5 +133,6 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    gradient(None, None)
+    # main()
     
