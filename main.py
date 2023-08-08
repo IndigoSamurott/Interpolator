@@ -45,17 +45,37 @@ def gradient(grey_frame, kernel):
     return gradient_image
             
 
+# ... (other code remains unchanged)
+
 def good_features_to_track(prev_grey_frame, max_corners=200, quality_level=0.01, min_distance=30, blockSize=3):
-    # 1. calculate flow derivatives for x and y and also t using sobel operator
-    # TODO: use sobel operator and make kernel array
-    I_x = gradient(prev_grey_frame, kernel_x)
-    I_y = gradient(prev_grey_frame, kernel_y)
-    # 2. calculate Ix^2, Iy^2, IxIy, IxIt, IyIt
-    # 3. sum squared derivatives in a window
-    # 4. construct Harris matrix
-    # 5. calculate Response function
-    # 6. apply threshold to Response function
-    pass
+    # Calculate flow derivatives for x and y using the gradient function and Sobel kernels
+    sobel_x = [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]
+    sobel_y = [[-1, -2, -1], [0, 0, 0], [1, 2, 1]]
+    
+    Ix = gradient(prev_grey_frame, sobel_x)
+    Iy = gradient(prev_grey_frame, sobel_y)
+
+    # Calculate Ix^2, Iy^2, IxIy, IxIt, IyIt
+    Ix2 = Ix ** 2
+    Iy2 = Iy ** 2
+    IxIy = Ix * Iy
+    IxIt = Ix * (-prev_grey_frame)
+    IyIt = Iy * (-prev_grey_frame)
+
+    # Sum squared derivatives in a window
+    corner_response = np.zeros(prev_grey_frame.shape)
+    
+    for x in range(offset, prev_grey_frame.shape[0] - offset):
+        for y in range(offset, prev_grey_frame.shape[1] - offset):
+            Ix2_sum = np.sum(Ix2[x - offset: x + offset + 1, y - offset: y + offset + 1])
+            Iy2_sum = np.sum(Iy2[x - offset: x + offset + 1, y - offset: y + offset + 1])
+            IxIy_sum = np.sum(IxIy[x - offset: x + offset + 1, y - offset: y + offset + 1])
+            IxIt_sum = np.sum(IxIt[x - offset: x + offset + 1, y - offset: y + offset + 1])
+            IyIt_sum = np.sum(IyIt[x - offset: x + offset + 1, y - offset: y + offset + 1])
+            
+
+
+
 
 
 def get_optical_flow(cap):
