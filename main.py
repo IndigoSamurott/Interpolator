@@ -14,33 +14,34 @@ import cv2
 import numpy as np
 
 def convolution2D(window, kernel):
-    convolution = 0
-    for i in range(len(window)):
-        for j in range(len(window[0])):
-            convolution += window[i][j] * kernel[i][j]
-    return convolution
+    return np.sum(window*kernel)
 
 def gradient(grey_frame, kernel):
-    kernel = [[-1, 0, 1], 
-              [-2, 0, 2], 
-              [-1, 0, 1]]
-    grey_frame = np.array([
-                  [1, 2, 3, 4, 5 ], 
-                  [6, 7, 8, 9, 10], 
-                  [11,12,13,14,15],
-                  [16,17,18,19,20],
-                  [21,22,23,24,25]
-                  ])
+    # kernel = [[-1, 0, 1], 
+    #           [-2, 0, 2], 
+    #           [-1, 0, 1]]
+    # grey_frame = np.array([
+    #               [1, 2, 3, 4, 5 ], 
+    #               [6, 7, 8, 9, 10], 
+    #               [11,12,13,14,15],
+    #               [16,17,18,19,20],
+    #               [21,22,23,24,25]
+    #               ])
     
     offset = len(kernel) // 2
+    height = grey_frame.shape[0]
+    width = grey_frame.shape[1]
     # TODO: make sure this is correct (check the size of the gradient image)
-    gradient_image = np.zeros((len(grey_frame), len(grey_frame[0])))
+    gradient_image = np.zeros((height, width))
+    print(len(grey_frame[0]))
+    # https://medium.com/@thepyprogrammer/2d-image-convolution-with-numpy-with-a-handmade-sliding-window-view-946c4acb98b4
+    for y in range(offset, height-offset):
+        for x in range(offset, width-offset):
+            window = grey_frame[y-offset:y+offset+1, x-offset:x+offset+1]
 
-    for x in range(offset, len(grey_frame[0])-offset):
-        for y in range(offset, len(grey_frame)-offset):
-            window = grey_frame[x-offset:x+offset+1, y-offset:y+offset+1]
             convolution = convolution2D(window, kernel)
             # TODO: add convolution to gradient image
+            gradient_image[y, x] = convolution
     
     return gradient_image
             
@@ -51,9 +52,12 @@ def good_features_to_track(prev_grey_frame, max_corners=200, quality_level=0.01,
     # Calculate flow derivatives for x and y using the gradient function and Sobel kernels
     sobel_x = [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]
     sobel_y = [[-1, -2, -1], [0, 0, 0], [1, 2, 1]]
-    
+
+    offset = len(sobel_x) // 2
+    print("calculating gradients...")
     Ix = gradient(prev_grey_frame, sobel_x)
     Iy = gradient(prev_grey_frame, sobel_y)
+    print("gradients calculated")
 
     # Calculate Ix^2, Iy^2, IxIy, IxIt, IyIt
     Ix2 = Ix ** 2
@@ -64,14 +68,30 @@ def good_features_to_track(prev_grey_frame, max_corners=200, quality_level=0.01,
 
     # Sum squared derivatives in a window
     corner_response = np.zeros(prev_grey_frame.shape)
+
+    k=0.04
+    response_matrix = np.zeros((prev_grey_frame.shape[0], prev_grey_frame.shape[1]))
     
-    for x in range(offset, prev_grey_frame.shape[0] - offset):
-        for y in range(offset, prev_grey_frame.shape[1] - offset):
-            Ix2_sum = np.sum(Ix2[x - offset: x + offset + 1, y - offset: y + offset + 1])
-            Iy2_sum = np.sum(Iy2[x - offset: x + offset + 1, y - offset: y + offset + 1])
-            IxIy_sum = np.sum(IxIy[x - offset: x + offset + 1, y - offset: y + offset + 1])
-            IxIt_sum = np.sum(IxIt[x - offset: x + offset + 1, y - offset: y + offset + 1])
-            IyIt_sum = np.sum(IyIt[x - offset: x + offset + 1, y - offset: y + offset + 1])
+    for y in range(offset, prev_grey_frame.shape[1] - offset):
+        print(f"{y}/{prev_grey_frame.shape[1]}")
+        for x in range(offset, prev_grey_frame.shape[0] - offset):
+            Ix2_sum = np.sum(Ix2[ y - offset: y + offset + 1, x - offset: x + offset + 1])
+            Iy2_sum = np.sum(Iy2[y - offset: y + offset + 1, x - offset: x + offset + 1])
+            IxIy_sum = np.sum(IxIy[y - offset: y + offset + 1, x - offset: x + offset + 1])
+            IxIt_sum = np.sum(IxIt[y - offset: y + offset + 1, x - offset: x + offset + 1])
+            IyIt_sum = np.sum(IyIt[y - offset: y + offset + 1, x - offset: x + offset + 1])
+
+            harris_matrix = np.array([[Ix2_sum, IxIy_sum], [IxIy_sum, Iy2_sum]])
+            trace = Ix2_sum + Iy2_sum
+            det = Ix2_sum * Iy2_sum - IxIy_sum**2
+            response = det - k*trace**2
+            response_matrix[y - offset, x - offset] = response
+
+    breakpoint()
+    # thresholding
+
+
+
             
 
 
@@ -104,6 +124,7 @@ def get_optical_flow(cap):
 
     while True:
         # corners we're tracking from
+        prev_corner_points = good_features_to_track(prev_grey_frame)
         prev_corner_points = cv2.goodFeaturesToTrack(prev_grey_frame,
                                      maxCorners=200,
                                      qualityLevel=0.01,
@@ -153,6 +174,9 @@ def main():
 
 
 if __name__ == '__main__':
-    gradient(None, None)
-    # main()
+    arr1 = np.array([[1,2,3],[4,5,6], [7,8,9]])
+    win1 = np.array([[1,1],[1,1]])
+    breakpoint()
+    main()
+    # https://www.geekering.com/programming-languages/python/brunorsilva/harris-corner-detector-python/
     
