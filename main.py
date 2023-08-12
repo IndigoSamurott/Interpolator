@@ -29,29 +29,35 @@ def gradient(grey_frame, kernel):
     #               ])
     
     offset = len(kernel) // 2
-    height = grey_frame.shape[0]
-    width = grey_frame.shape[1]
+    height, width = grey_frame.shape
     # TODO: make sure this is correct (check the size of the gradient image)
     gradient_image = np.zeros((height, width))
     print(len(grey_frame[0]))
-    # https://medium.com/@thepyprogrammer/2d-image-convolution-with-numpy-with-a-handmade-sliding-window-view-946c4acb98b4
-    for y in range(offset, height-offset):
-        for x in range(offset, width-offset):
-            window = grey_frame[y-offset:y+offset+1, x-offset:x+offset+1]
+    gradient_image[offset:height-offset, offset:width-offset] = \
+    np.array([
+        [convolution2D(grey_frame[y-offset:y+offset+1, x-offset:x+offset+1], kernel) 
+        for x in range(offset, width-offset)] 
+        for y in range(offset, height-offset)
+    ])
 
-            convolution = convolution2D(window, kernel)
-            # TODO: add convolution to gradient image
-            gradient_image[y, x] = convolution
+    '''max_val = np.max(gradient_image)
+    min_val = np.min(gradient_image)
     
+    normalised = (gradient_image - min_val) / (max_val - min_val)
+    
+    return normalised'''
+
     return gradient_image
             
 
-# ... (other code remains unchanged)
-
 def good_features_to_track(prev_grey_frame, max_corners=200, quality_level=0.01, min_distance=30, blockSize=3):
     # Calculate flow derivatives for x and y using the gradient function and Sobel kernels
-    sobel_x = [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]
-    sobel_y = [[-1, -2, -1], [0, 0, 0], [1, 2, 1]]
+    sobel_x = np.array([[-1, 0, 1], 
+                    [-2, 0, 2], 
+                    [-1, 0, 1]])
+    sobel_y = np.array([[-1, -2, -1], 
+                        [0, 0, 0], 
+                        [1, 2, 1]])
 
     offset = len(sobel_x) // 2
     print("calculating gradients...")
@@ -76,6 +82,8 @@ def good_features_to_track(prev_grey_frame, max_corners=200, quality_level=0.01,
         print(f"{y}/{prev_grey_frame.shape[1]}")
         for x in range(offset, prev_grey_frame.shape[0] - offset):
             Ix2_sum = np.sum(Ix2[ y - offset: y + offset + 1, x - offset: x + offset + 1])
+            print(Ix2_sum)
+            breakpoint()
             Iy2_sum = np.sum(Iy2[y - offset: y + offset + 1, x - offset: x + offset + 1])
             IxIy_sum = np.sum(IxIy[y - offset: y + offset + 1, x - offset: x + offset + 1])
             IxIt_sum = np.sum(IxIt[y - offset: y + offset + 1, x - offset: x + offset + 1])
