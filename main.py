@@ -48,9 +48,36 @@ def gradient(grey_frame, kernel):
     return normalised'''
 
     return gradient_image
-            
 
-def good_features_to_track(prev_grey_frame, max_corners=200, quality_level=0.01, min_distance=30, blockSize=3):
+
+def otsu_threshold(img, block_size, c):
+    pass
+
+
+def adaptive_threshold_mean(img, block_size, c):
+    # Check that the block size is odd and nonnegative
+    assert block_size % 2 == 1 and block_size > 0, "block_size must be an odd positive integer"
+
+    # Calculate the local threshold for each pixel
+    height, width = img.shape
+    binary = np.zeros((height, width), dtype=np.uint8)
+
+    for i in range(height):
+        for j in range(width):
+            # Calculate the local threshold using a square neighborhood centered at (i, j)
+            x_min = max(0, i - block_size // 2)
+            y_min = max(0, j - block_size // 2)
+            x_max = min(height - 1, i + block_size // 2)
+            y_max = min(width - 1, j + block_size // 2)
+            block = img[x_min:x_max+1, y_min:y_max+1]
+            thresh = np.mean(block) - c
+            if img[i, j] >= thresh:
+                binary[i, j] = 255
+
+    return binary
+
+
+def good_features_to_track(prev_grey_frame, threshold_func):
     # Calculate flow derivatives for x and y using the gradient function and Sobel kernels
     sobel_x = np.array([[-1, 0, 1], 
                     [-2, 0, 2], 
@@ -60,6 +87,7 @@ def good_features_to_track(prev_grey_frame, max_corners=200, quality_level=0.01,
                         [1, 2, 1]])
 
     offset = len(sobel_x) // 2
+    height, width = prev_grey_frame.shape
     print("calculating gradients...")
     Ix = gradient(prev_grey_frame, sobel_x)
     Iy = gradient(prev_grey_frame, sobel_y)
@@ -76,18 +104,13 @@ def good_features_to_track(prev_grey_frame, max_corners=200, quality_level=0.01,
     corner_response = np.zeros(prev_grey_frame.shape)
 
     k=0.04
-    response_matrix = np.zeros((prev_grey_frame.shape[0], prev_grey_frame.shape[1]))
+    response_matrix = np.zeros((height, width))
     
-    for y in range(offset, prev_grey_frame.shape[1] - offset):
-        print(f"{y}/{prev_grey_frame.shape[1]}")
-        for x in range(offset, prev_grey_frame.shape[0] - offset):
-            Ix2_sum = np.sum(Ix2[ y - offset: y + offset + 1, x - offset: x + offset + 1])
-            print(Ix2_sum)
-            breakpoint()
-            Iy2_sum = np.sum(Iy2[y - offset: y + offset + 1, x - offset: x + offset + 1])
-            IxIy_sum = np.sum(IxIy[y - offset: y + offset + 1, x - offset: x + offset + 1])
-            IxIt_sum = np.sum(IxIt[y - offset: y + offset + 1, x - offset: x + offset + 1])
-            IyIt_sum = np.sum(IyIt[y - offset: y + offset + 1, x - offset: x + offset + 1])
+    for x in range(offset, width - offset):
+        print(f"{x}/{width}")
+        for y in range(offset, height - offset):
+            Ix2_sum, Iy2_sum, IxIy_sum = \
+                [np.sum(arr[y - offset: y + offset + 1, x - offset: x + offset + 1]) for arr in [Ix2, Iy2, IxIy]]
 
             harris_matrix = np.array([[Ix2_sum, IxIy_sum], [IxIy_sum, Iy2_sum]])
             trace = Ix2_sum + Iy2_sum
@@ -96,11 +119,23 @@ def good_features_to_track(prev_grey_frame, max_corners=200, quality_level=0.01,
             response_matrix[y - offset, x - offset] = response
 
     breakpoint()
-    # thresholding
+    
+    '''response_matrix -= np.min(response_matrix)
+    response_matrix /= np.max(response_matrix) - np.min(response_matrix)'''
+    corners = []
+    thresholded_img = threshold_func(response_matrix, len(sobel_x), 4)
 
+    for x in range(offset, width - offset):
+        for y in range(offset, height - offset):
+            if thresholded_img[y, x] != 0:
+                corners.append((x,y))
 
+    
+    breakpoint()
 
-            
+            # https://towardsdatascience.com/hands-on-otsu-thresholding-algorithm-for-image-background-segmentation-using-python-9fa0575ac3d2
+            # https://medium.com/geekculture/image-thresholding-from-scratch-a66ae0fb6f09
+
 
 
 
@@ -132,7 +167,7 @@ def get_optical_flow(cap):
 
     while True:
         # corners we're tracking from
-        prev_corner_points = good_features_to_track(prev_grey_frame)
+        prev_corner_points = good_features_to_track(prev_grey_frame, threshold_func=adaptive_threshold_mean)
         prev_corner_points = cv2.goodFeaturesToTrack(prev_grey_frame,
                                      maxCorners=200,
                                      qualityLevel=0.01,
@@ -182,9 +217,9 @@ def main():
 
 
 if __name__ == '__main__':
-    arr1 = np.array([[1,2,3],[4,5,6], [7,8,9]])
-    win1 = np.array([[1,1],[1,1]])
-    breakpoint()
     main()
     # https://www.geekering.com/programming-languages/python/brunorsilva/harris-corner-detector-python/
-    
+    # play arounf with thresholding function
+    # plot corners on image itself and compare
+    # optimise code to make it faster
+    # compare our optical flow method to the standard one.
