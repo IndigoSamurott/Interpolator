@@ -12,6 +12,9 @@
 
 import cv2
 import numpy as np
+from scipy import signal
+
+# todo: normalise responses etc, goal is parity w/ opencv
 
 def convolution2D(window, kernel):
     return np.sum(window*kernel)
@@ -32,7 +35,6 @@ def gradient(grey_frame, kernel):
     height, width = grey_frame.shape
     # TODO: make sure this is correct (check the size of the gradient image)
     gradient_image = np.zeros((height, width))
-    print(len(grey_frame[0]))
     gradient_image[offset:height-offset, offset:width-offset] = \
     np.array([
         [convolution2D(grey_frame[y-offset:y+offset+1, x-offset:x+offset+1], kernel) 
@@ -42,36 +44,9 @@ def gradient(grey_frame, kernel):
 
     return gradient_image
 
+
 def otsu_threshold(img, block_size, c):
     pass
-
-def gaussian_threshold(img, block_size, c):
-    # Check that the block size is odd and nonnegative
-    assert block_size % 2 == 1 and block_size > 0, "block_size must be an odd positive integer"
-
-    # Calculate the local threshold for each pixel using Gaussian weighted mean
-    height, width = img.shape
-    binary = np.zeros((height, width), dtype=np.uint8)
-
-    for i in range(height):
-        for j in range(width):
-            # Calculate the local threshold using a square neighborhood centered at (i, j)
-            x_min = max(0, i - block_size // 2)
-            y_min = max(0, j - block_size // 2)
-            x_max = min(height - 1, i + block_size // 2)
-            y_max = min(width - 1, j + block_size // 2)
-            block = img[x_min:x_max+1, y_min:y_max+1]
-            
-            # Calculate Gaussian weighted mean as the threshold for the current pixel
-            weights = np.exp(-(np.square(np.arange(-block_size // 2, block_size // 2 + 1)) / (2 * c ** 2)))
-            weights = weights / np.sum(weights)  # Normalize weights
-            thresh = np.sum(block * weights)  # Apply weighted mean for the current pixel
-
-            if img[i, j] >= thresh:
-                binary[i, j] = 255
-
-    return binary
-
 
 
 def adaptive_threshold_mean(img, block_size, c):
@@ -81,7 +56,7 @@ def adaptive_threshold_mean(img, block_size, c):
     # Calculate the local threshold for each pixel
     height, width = img.shape
     binary = np.zeros((height, width), dtype=np.uint8)
-
+    
     for i in range(height):
         for j in range(width):
             # Calculate the local threshold using a square neighborhood centered at (i, j)
@@ -96,18 +71,29 @@ def adaptive_threshold_mean(img, block_size, c):
 
     return binary
 
+def get_corners_from_threshold(thresholded_img, offset, height, width):
+    corners = []
+    for x in range(offset, width - offset):
+        for y in range(offset, height - offset):
+            if thresholded_img[y, x] != 0:
+                corners.append([(x, y)])
+    return corners
+
 
 def good_features_to_track(prev_grey_frame, threshold_func, method):
 
     if method == 'opencv':
+        maxCorners = 5000
+        qualityLevel=0.1
+        minDistance=1
         corners = cv2.goodFeaturesToTrack(
             prev_grey_frame,
-            maxCorners=10000,
-            qualityLevel=0.01,
-            minDistance=30,
+            maxCorners=maxCorners,
+            qualityLevel=qualityLevel,
+            minDistance=minDistance,
             blockSize=3,
         )
-        return corners
+        
     elif method == 'custom':
         # Calculate flow derivatives for x and y using the gradient function and Sobel kernels
         sobel_x = np.array([[-1, 0, 1], 
@@ -120,8 +106,12 @@ def good_features_to_track(prev_grey_frame, threshold_func, method):
         offset = len(sobel_x) // 2
         height, width = prev_grey_frame.shape
         print("calculating gradients...")
-        Ix = gradient(prev_grey_frame, sobel_x)
-        Iy = gradient(prev_grey_frame, sobel_y)
+        mode = 'same'
+        Ix = signal.convolve2d(prev_grey_frame, sobel_x, boundary='symm', mode=mode)
+        Iy = signal.convolve2d(prev_grey_frame, sobel_y, boundary='symm', mode=mode)
+
+        # Ix = gradient(prev_grey_frame, sobel_x)
+        # Iy = gradient(prev_grey_frame, sobel_y)
         print("gradients calculated")
 
         # Calculate Ix^2, Iy^2, IxIy, IxIt, IyIt
@@ -149,24 +139,30 @@ def good_features_to_track(prev_grey_frame, threshold_func, method):
                 response = det - k * trace**2
                 response_matrix[y - offset, x - offset] = response
 
-        thresholded_img = threshold_func(response_matrix, len(sobel_x), 4)
+        c=4
+        breakpoint()
+        # thresholded_img = threshold_func(response_matrix, len(sobel_x), c)
+        thresholded_img = cv2.adaptiveThreshold(response_matrix, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 199, -130)
+        corners = get_corners_from_threshold(thresholded_img, offset, height, width)
 
-        corners = []
-        for x in range(offset, width - offset):
-            for y in range(offset, height - offset):
-                if thresholded_img[y, x] != 0:
-                    corners.append([(x, y)])
     
     corners = np.intp(corners)
 
     marked_frame = cv2.cvtColor(prev_grey_frame, cv2.COLOR_GRAY2BGR)  # Convert grayscale frame to BGR, didn't work otherwise
+    
     for corner in corners:
         x, y = corner[0]
         cv2.circle(marked_frame, (x, y), 1, (0, 0, 255), -1)
 
-    cv2.imwrite("corner_img.jpg", marked_frame)
+
+    if method=="opencv":
+        cv2.imwrite(f"corner_img_{method}_{maxCorners}_{qualityLevel}_{minDistance}.jpg", marked_frame)
+    
+    else:
+        cv2.imwrite(f"corner_img_{method}_{c}_{k}.jpg", marked_frame)
 
     breakpoint()
+    return corners
 
 
 
@@ -206,7 +202,7 @@ def get_optical_flow(cap):
         # corners we're tracking from
         prev_corner_points = None  # Initialize to None
         if frame_counter == 40:  # TESTING only run on the 40th frame because it's lit up
-            prev_corner_points = good_features_to_track(prev_grey_frame, threshold_func=gaussian_threshold, method='opencv')
+            prev_corner_points = good_features_to_track(prev_grey_frame, threshold_func=adaptive_threshold_mean, method='custom')
 
             breakpoint()
         # get next frame and convert to grey
