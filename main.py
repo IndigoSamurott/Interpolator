@@ -12,6 +12,8 @@
 
 import cv2
 import numpy as np
+import os
+import csv
 from scipy import signal
 
 # todo: normalise responses etc, goal is parity w/ opencv
@@ -56,7 +58,6 @@ def adaptive_threshold_mean(img, block_size, c):
     # Calculate the local threshold for each pixel
     height, width = img.shape
     binary = np.zeros((height, width), dtype=np.uint8)
-    
     for i in range(height):
         for j in range(width):
             # Calculate the local threshold using a square neighborhood centered at (i, j)
@@ -68,6 +69,8 @@ def adaptive_threshold_mean(img, block_size, c):
             thresh = np.mean(block) - c
             if img[i, j] >= thresh:
                 binary[i, j] = 255
+
+            binary[i,j] = 1 if abs(img[i,j]) > 0.0026 else 0 #tested between 0.00255 & ~259 but saw little change compared to ~26
 
     return binary
 
@@ -125,24 +128,35 @@ def good_features_to_track(prev_grey_frame, threshold_func, method):
         corner_response = np.zeros(prev_grey_frame.shape)
 
         k = 0.04
+    
         response_matrix = np.zeros((height, width))
 
-        for x in range(offset, width - offset):
-            print(f"{x}/{width}")
-            for y in range(offset, height - offset):
-                Ix2_sum, Iy2_sum, IxIy_sum = \
-                    [np.sum(arr[y - offset: y + offset + 1, x - offset: x + offset + 1]) for arr in [Ix2, Iy2, IxIy]]
+        if os.path.isfile("response_matrix.csv"):
+            with open("response_matrix.csv", "r") as f:
+                reader = csv.reader(f)
+                data = list(reader)
+                response_matrix = np.array(data, dtype=float)
 
-                harris_matrix = np.array([[Ix2_sum, IxIy_sum], [IxIy_sum, Iy2_sum]])
-                trace = Ix2_sum + Iy2_sum
-                det = Ix2_sum * Iy2_sum - IxIy_sum**2
-                response = det - k * trace**2
-                response_matrix[y - offset, x - offset] = response
+        else:
+            for x in range(offset, width - offset):
+                print(f"{x}/{width}")
+                for y in range(offset, height - offset):
+                    Ix2_sum, Iy2_sum, IxIy_sum = \
+                        [np.sum(arr[y - offset: y + offset + 1, x - offset: x + offset + 1]) for arr in [Ix2, Iy2, IxIy]]
+
+                    harris_matrix = np.array([[Ix2_sum, IxIy_sum], [IxIy_sum, Iy2_sum]])
+                    trace = Ix2_sum + Iy2_sum
+                    det = Ix2_sum * Iy2_sum - IxIy_sum**2
+                    response = det - k * trace**2
+                    response_matrix[y - offset, x - offset] = response
+            np.savetxt("response_matrix.csv", response_matrix, delimiter=",")
+
+        norm = np.linalg.norm(response_matrix, 1)
+
+        response_matrix_normalised = response_matrix/norm
 
         c=4
-        breakpoint()
-        # thresholded_img = threshold_func(response_matrix, len(sobel_x), c)
-        thresholded_img = cv2.adaptiveThreshold(response_matrix, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 199, -130)
+        thresholded_img = threshold_func(response_matrix_normalised, len(sobel_x), c)
         corners = get_corners_from_threshold(thresholded_img, offset, height, width)
 
     
