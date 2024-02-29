@@ -6,11 +6,10 @@ import time
 
 # priority 0: oop concern
 # priority 1: working threshold
-# priority 2: convolve dot product, convolve makegrey, signal convolve
-# priority 3: working interpolation
-# priority 4: passing video segment times
-# priority 5: upload interpolated vid to mediafire
-# priority 6: at frames in regular odd interval, hash frame data, hash table, mediafire link
+# priority 2: working interpolation
+# priority 3: passing video segment times
+# priority 4: upload interpolated vid to mediafire
+# priority 5: at frames in regular odd interval, hash frame data, hash table, mediafire link
 
 
 sobel = { 'x': np.array([[-1,  0,  1], 
@@ -166,8 +165,6 @@ def sort(inp):
 
 def makegrey(BGR): #cv2 decodes frames to BGR rather than RGB
     return np.array([[0.114*j[0] + 0.587*j[1] + 0.299*j[2] for j in i] for i in BGR]) #weighted colours
-    # weights = np.array([0.114, 0.587, 0.299])
-    # return np.dot(BGR, weights) SO CONVOLVE?
 
 
 def convolve(imgwin, kernel):
@@ -178,16 +175,6 @@ def convolve(imgwin, kernel):
         for y in range(kern_y):
             filterpix += kernel[y][x] * imgwin[y][x]
     return int((filterpix / factor)) #normalise
-
-""" def convolve(imgwin, kernel, x=0, y=0):
-    kern_y, kern_x = kernel.shape
-    filterpix = 0 #initialise
-    if x < kern_x and y < kern_y:
-        filterpix = kernel[y][x] * imgwin[y][x]
-        return filterpix + convolve(imgwin, kernel, x + 1, y) if x+1 < kern_x else convolve(imgwin, kernel, 0, y + 1)
-    else:
-        return 0
- """
 
 def gradient(grey_frame, kernel):
     offset = len(kernel) // 2
@@ -200,19 +187,6 @@ def gradient(grey_frame, kernel):
         for y in range(offset, height-offset)
     ])
     return gradient_image
-
-""" def gradient(grey_frame, kernel):
-    offset = len(kernel) // 2
-    height, width = grey_frame.shape
-    gradient_image = np.zeros((height, width)) #initialise
-    # slide convolution across image, normalising it in range 0-255
-    gradient_image[offset:height-offset , offset:width-offset] = \
-    np.array([
-        [ int((convolve(grey_frame[y-offset:y+offset+1, x-offset:x+offset+1], kernel) / (kernel.shape[0] * kernel.shape[1])) * 255) 
-        for x in range(offset, width-offset) ] 
-        for y in range(offset, height-offset)
-    ])
-    return gradient_image """
 
 
 def adaptive_mean(pixel_responses, winsize,c): #thresholds corners in local neighbourhoods
@@ -233,7 +207,7 @@ def adaptive_mean(pixel_responses, winsize,c): #thresholds corners in local neig
             mean = sum(sum(nhood))/winsize**2
             sumsq = sum(x**2 for y in nhood for x in y)
             standard_dev = (sumsq/winsize**2 - mean**2) ** 0.5
-            thresh = mean + 0.0026# change for sobels; this arbitrary threshold works by examining results; need to make std work
+            thresh = mean + 0.0026#this arbitrary threshold works by examining results; need to make std work
             if pixel_responses[y, x] >= thresh:
                 boolimg[y, x] = 1
                 corners.append([(x, y)])
@@ -247,9 +221,6 @@ def corner_det(prev_grey_frame, threshold_func):
     offset = len(sobel['x']) // 2
     height, width = prev_grey_frame.shape
     print("calculating gradients...")
-    # dx = signal.convolve2d(prev_grey_frame, sobel['x'], 'symm', 'same')
-    # dy = signal.convolve2d(prev_grey_frame, sobel['y'], 'symm', 'same')
-
     dx = gradient(prev_grey_frame, sobel['x'])
     dy = gradient(prev_grey_frame, sobel['y'])
     print("gradients calculated")
@@ -309,7 +280,7 @@ def lk(prev_corners, new_corners, dx, dy):
 
             A = [[window_dx[i], window_dy[i]] for i in range(len(window_dx))]
             A_T = [[row[i] for row in A] for i in range(len(A[0]))] #transposed; flipped along diagonal
-            A_AT = sum([A_T[i][0]*A[i] for i in range(len(A))]) #dot product of A & A_T
+            A_AT = sum([A_T[i][0] * A[i] for i in range(len(A))]) #dot product of A & A_T
 
 
 def interpolate(vid):
