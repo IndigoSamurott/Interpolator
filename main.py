@@ -1,15 +1,12 @@
 import cv2
 import numpy as np
-from scipy import signal
 import time
 # np.set_printoptions(threshold = np.inf)
 
-# priority 0: oop concern
-# priority 1: working threshold
-# priority 2: working interpolation
-# priority 3: passing video segment times
-# priority 4: upload interpolated vid to mediafire
-# priority 5: at frames in regular odd interval, hash frame data, hash table, mediafire link
+# priority 1: working interpolation
+# priority 2: passing video segment times
+# priority 3: upload interpolated vid to mediafire
+# priority 4: at frames in regular odd interval, hash frame data, hash table, mediafire link
 
 
 sobel = { 'x': np.array([[-1,  0,  1], 
@@ -102,11 +99,11 @@ class heap(data_type):
         
     def peek(self):
         if self.is_empty():
-            return None
+            super().peek()
         else:
           return self.data[0]
 
-#############SORTING#############
+
 def insertion_sort(inp):
     for i in range(1, len(inp)):
         temp = inp[i]
@@ -127,7 +124,6 @@ def heapsort(inp):
         out.append(theheap.pop())
     
     return out
-
 
 def introsort(inp, maxdepth):
     if len(inp) < 16:
@@ -162,7 +158,6 @@ def sort(inp):
     return inp
 
 
-
 def makegrey(BGR): #cv2 decodes frames to BGR rather than RGB
     return np.array([[0.114*j[0] + 0.587*j[1] + 0.299*j[2] for j in i] for i in BGR]) #weighted colours
 
@@ -170,16 +165,16 @@ def makegrey(BGR): #cv2 decodes frames to BGR rather than RGB
 def convolve(imgwin, kernel):
     kern_y, kern_x = kernel.shape
     filterpix = 0
-    factor = kern_y * kern_x
     for x in range(kern_x):
         for y in range(kern_y):
             filterpix += kernel[y][x] * imgwin[y][x]
-    return int((filterpix / factor)) #normalise
+    return filterpix
 
 def gradient(grey_frame, kernel):
     offset = len(kernel) // 2
     height, width = grey_frame.shape
-    gradient_image = np.zeros((height, width))
+    gradient_image = np.zeros_like(grey_frame)
+
     gradient_image[offset:height-offset, offset:width-offset] = \
     np.array([
         [convolve(grey_frame[y-offset:y+offset+1, x-offset:x+offset+1], kernel) 
@@ -189,7 +184,7 @@ def gradient(grey_frame, kernel):
     return gradient_image
 
 
-def adaptive_mean(pixel_responses, winsize,c): #thresholds corners in local neighbourhoods
+def adaptive_mean(pixel_responses, winsize): #thresholds corners in local neighbourhoods
     offset = winsize//2
     height, width = pixel_responses.shape
     boolimg = np.zeros_like(pixel_responses)
@@ -204,11 +199,11 @@ def adaptive_mean(pixel_responses, winsize,c): #thresholds corners in local neig
             upper_y = min(height - 1, y + offset)
 
             nhood = pixel_responses[lower_y:upper_y+1, lower_x:upper_x+1]
-            mean = sum(sum(nhood))/winsize**2
+            mean = np.sum(nhood)//winsize**2
             sumsq = sum(x**2 for y in nhood for x in y)
             standard_dev = (sumsq/winsize**2 - mean**2) ** 0.5
-            thresh = mean + 0.0026#this arbitrary threshold works by examining results; need to make std work
-            if pixel_responses[y, x] >= thresh:
+            thresh = mean + 2.85*standard_dev #could adjust 2.75-3
+            if pixel_responses[y, x] > thresh:
                 boolimg[y, x] = 1
                 corners.append([(x, y)])
 
@@ -216,21 +211,16 @@ def adaptive_mean(pixel_responses, winsize,c): #thresholds corners in local neig
 
 
 def corner_det(prev_grey_frame, threshold_func):
-    # calculate flow derivatives for x and y using the gradient function and Sobel kernels
-
     offset = len(sobel['x']) // 2
     height, width = prev_grey_frame.shape
-    print("calculating gradients...")
+    print("Computing gradients...")
     dx = gradient(prev_grey_frame, sobel['x'])
     dy = gradient(prev_grey_frame, sobel['y'])
-    print("gradients calculated")
 
     dx2 = dx ** 2 ; dy2 = dy ** 2 ; dxdy = dx * dy
-    
     potential_matrix = np.zeros_like(prev_grey_frame)
-
+    print('Rating corners...')
     for x in range(offset, width - offset):
-        print(f"{x}/{width}")
         for y in range(offset, height - offset):
             # sum squared derivatives in a window
             window_dx2 = dx2[y - offset: y + offset + 1, x - offset: x + offset + 1]
@@ -238,21 +228,16 @@ def corner_det(prev_grey_frame, threshold_func):
             window_dxdy = dxdy[y - offset: y + offset + 1, x - offset: x + offset + 1]
             dx2_sum, dy2_sum, dxdy_sum = np.sum(window_dx2), np.sum(window_dy2), np.sum(window_dxdy)
 
-            harris_matrix = np.array([[dx2_sum, dxdy_sum], 
-                                      [dxdy_sum, dy2_sum]])
+            """ harris_matrix = np.array([[dx2_sum, dxdy_sum], 
+                                          [dxdy_sum, dy2_sum]]) """
+            
             harris_trace = dx2_sum + dy2_sum #sum of diagonal
             harris_determinant = dx2_sum * dy2_sum - dxdy_sum*dxdy_sum #diagonal product - diagonal product
             harris_response = harris_determinant - 0.04 * harris_trace**2 #the function that rates corners
             potential_matrix[y - offset, x - offset] = harris_response
 
-    #normalise the matrix of corner likelihoods
-    norm = np.linalg.norm(potential_matrix, 1)
-    potential_matrix = potential_matrix/norm
-
-    print('\n,threshtest');breakpoint()
-    thresholded_img, corners = threshold_func(potential_matrix, len(sobel['x']),'c')
-
-    print(len(corners))
+    print('Applying thresholds...')
+    thresholded_img, corners = threshold_func(potential_matrix, len(sobel['x']))
 
     # visualise corners for testing  
     marked_frame = cv2.cvtColor(prev_grey_frame, cv2.COLOR_GRAY2BGR)  # convert grayscale frame to BGR, didn't work otherwise
@@ -284,23 +269,24 @@ def lk(prev_corners, new_corners, dx, dy):
 
 
 def interpolate(vid):
+    successfully_read, frame = vid.read()
+    prev_grey_frame = None
+    if successfully_read:
+        prev_grey_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) ######################################
     frame_counter = 0 #TESTING
-
+    
     while True:
-        # corners tracked from
-        prev_corner_points = None  # initialize to None
-        if frame_counter == 40:  # TESTING only run on the 40th frame because it's lit up
+        if frame_counter == 20:  # TESTING only run on the 20th frame because it's lit up
             prev_corner_points, dx, dy = corner_det(prev_grey_frame, threshold_func=adaptive_mean)
-            t=time.perf_counter()
-            grey_frame = makegrey(frame)
-            print('TIMED',time.perf_counter()-t)
             breakpoint()
         # get next frame and convert to grey
-        successfully_read, frame = vid.read()
+        
         if not successfully_read: # if frame read unsuccessful
             break
-
-        grey_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        successfully_read, frame = vid.read()
+        if not successfully_read:
+            break
+        grey_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) #############################################
         # grey_frame = makegrey(frame)
         if prev_corner_points is not None:
             lk()
@@ -333,10 +319,9 @@ pass
 
 def batch_select():
     global files; files = {}
-
     while True:
-        path = input('Enter file path: ')
-        if not path:
+        path = input('\nEnter file path: ').replace('"','') #windows applies quotes around path
+        if not path and len(files) != 0:
             break
 
         validcheck = cv2.VideoCapture(path)
@@ -362,9 +347,7 @@ def batch_select():
 
 def main():
     projects = batch_select()
-
-    while projects.is_empty() != True:
+    while not projects.is_empty():
         interpolate(cv2.VideoCapture(files[projects.pop()]))
-
 
 main()
