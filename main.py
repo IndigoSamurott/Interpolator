@@ -1,12 +1,13 @@
 import cv2
 import numpy as np
-import time
-# np.set_printoptions(threshold = np.inf)
+from tqdm import tqdm, trange
+np.seterr(all='ignore')
 
-# priority 1: working interpolation
-# priority 2: passing video segment times
-# priority 3: upload interpolated vid to mediafire
-# priority 4: at frames in regular odd interval, hash frame data, hash table, mediafire link
+
+# PRIORITY 0: CORNERS (INCREASE THRESH?)
+# priority 1: passing video segment times
+# priority 2: upload interpolated vid to mediafire
+# priority 3: at frames in regular odd interval, hash frame data, hash table, mediafire link
 
 
 sobel = { 'x': np.array([[-1,  0,  1], 
@@ -104,7 +105,7 @@ class heap(data_type):
           return self.data[0]
 
 
-def insertion_sort(inp):
+def insertion_sort(inp): #O(n²), best for small lists because little overhead (no recursion)
     for i in range(1, len(inp)):
         temp = inp[i]
         j = i-1
@@ -114,7 +115,7 @@ def insertion_sort(inp):
         inp[j + 1] = temp
     return inp
 
-def heapsort(inp):
+def heapsort(inp): #O(nlogn) for unusual cases where quicksort goes wrong
     out = []
     theheap = heap()
     for i in inp:
@@ -125,13 +126,13 @@ def heapsort(inp):
     
     return out
 
-def introsort(inp, maxdepth):
+def introsort(inp, maxdepth): #introspective
     if len(inp) < 16:
         insertion_sort(inp)
     elif maxdepth == 0:
         heapsort(inp)
     else:
-        #quicksort logic adapted for depth constraint
+        #quicksort logic adapted for depth constraint, avg O(nlogn) worst O(n2)
         pivot = inp[0]
         left = []
         equal = []
@@ -159,7 +160,19 @@ def sort(inp):
 
 
 def makegrey(BGR): #cv2 decodes frames to BGR rather than RGB
-    return np.array([[0.114*j[0] + 0.587*j[1] + 0.299*j[2] for j in i] for i in BGR]) #weighted colours
+    return np.array([[0.114*j[0] + 0.587*j[1] + 0.299*j[2] for j in i] for i in tqdm(BGR, desc='Converting to greyscale')]) #weighted colours
+
+def dot(a, b):
+    a = np.array(a)
+    b = np.array(b)
+    product = np.zeros((a.shape[0],b.shape[1]))
+
+    for i in range(len(a)):
+        for j in range(len(b[0])):
+            for k in range(len(b)):
+                product[i][j] += a[i][k] * b[k][j]
+
+    return product
 
 
 def convolve(imgwin, kernel):
@@ -179,7 +192,7 @@ def gradient(grey_frame, kernel):
     np.array([
         [convolve(grey_frame[y-offset:y+offset+1, x-offset:x+offset+1], kernel) 
         for x in range(offset, width-offset)] 
-        for y in range(offset, height-offset)
+        for y in trange(offset, height-offset)
     ])
     return gradient_image
 
@@ -190,7 +203,7 @@ def adaptive_mean(pixel_responses, winsize): #thresholds corners in local neighb
     boolimg = np.zeros_like(pixel_responses)
     corners = []
 
-    for x in range(width):
+    for x in trange(width, desc='Applying thresholds'):
         for y in range(height):
 
             lower_x = max(0, x - offset) #setting edges of neighbourhood within image bounds
@@ -202,7 +215,7 @@ def adaptive_mean(pixel_responses, winsize): #thresholds corners in local neighb
             mean = np.sum(nhood)//winsize**2
             sumsq = sum(x**2 for y in nhood for x in y)
             standard_dev = (sumsq/winsize**2 - mean**2) ** 0.5
-            thresh = mean + 2.85*standard_dev #could adjust 2.75-3
+            thresh = mean + 2.85*standard_dev
             if pixel_responses[y, x] > thresh:
                 boolimg[y, x] = 1
                 corners.append([(x, y)])
@@ -213,14 +226,14 @@ def adaptive_mean(pixel_responses, winsize): #thresholds corners in local neighb
 def corner_det(prev_grey_frame, threshold_func):
     offset = len(sobel['x']) // 2
     height, width = prev_grey_frame.shape
-    print("Computing gradients...")
+    print("Computing x gradients:")
     dx = gradient(prev_grey_frame, sobel['x'])
+    print("Computing y gradients:")
     dy = gradient(prev_grey_frame, sobel['y'])
 
     dx2 = dx ** 2 ; dy2 = dy ** 2 ; dxdy = dx * dy
     potential_matrix = np.zeros_like(prev_grey_frame)
-    print('Rating corners...')
-    for x in range(offset, width - offset):
+    for x in trange(offset, width - offset, desc='Rating corners'):
         for y in range(offset, height - offset):
             # sum squared derivatives in a window
             window_dx2 = dx2[y - offset: y + offset + 1, x - offset: x + offset + 1]
@@ -236,7 +249,6 @@ def corner_det(prev_grey_frame, threshold_func):
             harris_response = harris_determinant - 0.04 * harris_trace**2 #the function that rates corners
             potential_matrix[y - offset, x - offset] = harris_response
 
-    print('Applying thresholds...')
     thresholded_img, corners = threshold_func(potential_matrix, len(sobel['x']))
 
     # visualise corners for testing  
@@ -250,71 +262,57 @@ def corner_det(prev_grey_frame, threshold_func):
     return corners, dx, dy
 
 
-def lk(prev_corners, new_corners, dx, dy):
-    #tau: threshold param to be tested
-    tau = 1e-3
-    height, width = prev_corners.shape
+def lk(previmg, newimg, dx, dy, dt):
+    height, width = previmg.shape
     offset = len(sobel['x'])//2
+    u = v = np.zeros_like(previmg)
 
-    for y in range(offset, height - offset):
+    for y in trange(offset, height - offset, desc='Finding flow'):
         for x in range(offset, width - offset):
-            window_dx = dx[y - offset : y + offset + 1, x - offset : x + offset + 1]
-            flatwindx = [i for j in window_dx for i in j]
-            window_dy = dy[y - offset : y + offset + 1,x - offset : x + offset + 1]
+            nhood_dx = dx[y - offset: y + offset + 1, x - offset: x + offset + 1]
+            nhood_dy = dy[y - offset: y + offset + 1, x - offset: x + offset + 1]
+            nhood_dt = dt[y - offset: y + offset + 1, x - offset: x + offset + 1]
+            S = np.array([nhood_dx, nhood_dy]).reshape(-1, 2)
+            S_T = [[row[i] for row in S] for i in range(len(S[0]))] #transposed; flipped along diagonal
+            S_ST = dot(S_T, S)
 
+            inv_SST = np.linalg.pinv(S_ST) #pseudo-inverse works on ill-conditioned matrices
 
-            A = [[window_dx[i], window_dy[i]] for i in range(len(window_dx))]
-            A_T = [[row[i] for row in A] for i in range(len(A[0]))] #transposed; flipped along diagonal
-            A_AT = sum([A_T[i][0] * A[i] for i in range(len(A))]) #dot product of A & A_T
+            u[y, x], v[y, x] = dot(dot(inv_SST, S_T), nhood_dt.reshape(9,-1))
+
+    
+    flow = np.array([u, v])*15
+    return flow
 
 
 def interpolate(vid):
     successfully_read, frame = vid.read()
     prev_grey_frame = None
     if successfully_read:
-        prev_grey_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) ######################################
-    frame_counter = 0 #TESTING
-    
+        prev_grey_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) ##########################################
+
+    frame_counter = 1
+    prev_corner_points = None
+
     while True:
-        if frame_counter == 20:  # TESTING only run on the 20th frame because it's lit up
-            prev_corner_points, dx, dy = corner_det(prev_grey_frame, threshold_func=adaptive_mean)
-            breakpoint()
-        # get next frame and convert to grey
-        
-        if not successfully_read: # if frame read unsuccessful
+        if not successfully_read:
             break
+
         successfully_read, frame = vid.read()
         if not successfully_read:
             break
-        grey_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) #############################################
-        # grey_frame = makegrey(frame)
-        if prev_corner_points is not None:
-            lk()
 
+        grey_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) ###############################################
+        dt = grey_frame - prev_grey_frame
 
-        prev_grey_frame = grey_frame.copy()
-        frame_counter += 1 
-        pass
-    pass
-pass
-""" def interpolate(vid):
-    prev_corner_points = None
-    while True:
-        successfully_read, frame = vid.read()
-        if not successfully_read:  # if frame read unsuccessful
-            break
-
-        grey_frame = makegrey(frame)
-
-        new_corner_points = corner_det(grey_frame, threshold_func=adaptive_mean)
-        
-
-        if prev_corner_points is not None:
-            lk(prev_corner_points, new_corner_points, dx, dy)
+        if frame_counter == 20: # TESTING only run on the 20th frame because it's lit up
+            prev_corner_points, dx, dy = corner_det(prev_grey_frame, threshold_func=adaptive_mean)
+        elif frame_counter == 21:
+            new_corner_points, _, _ = corner_det(grey_frame, threshold_func=adaptive_mean)
+            flow = lk(prev_grey_frame, grey_frame, dx, dy, dt)
 
         prev_grey_frame = grey_frame.copy()
-        prev_corner_points, dx, dy = corner_det(prev_grey_frame, threshold_func=adaptive_mean) """
-
+        frame_counter += 1
 
 
 def batch_select():
@@ -343,6 +341,55 @@ def batch_select():
     for i in (sort(files))[::-1]:
         nextvids.push(i)
     return nextvids
+
+
+
+
+
+
+
+
+img1 = cv2.imread(r"C:\Users\deept_oeog1pt\Downloads\eval-color-allframes\eval-data\Army\frame11.png")
+img2 = cv2.imread(r"C:\Users\deept_oeog1pt\Downloads\eval-color-allframes\eval-data\Army\frame12.png")
+
+
+
+def motionify(origin_img, flow):
+    height, width = origin_img.shape[0], origin_img.shape[1]
+    remapped = np.zeros_like(origin_img)
+
+    for y in range(height):
+        for x in range(width):
+            
+            new_x, new_y = int(round(x + flow[y, x, 0])), int(round(y + flow[y, x, 1]))
+
+            new_x = np.clip(new_x, 0, width - 1) #retain boundaries
+            new_y = np.clip(new_y, 0, height - 1)
+
+            remapped[y, x] = origin_img[new_y, new_x]
+
+    return remapped
+
+
+def tempgen(frame_1, frame_2):
+    grey1 = makegrey(frame_1)
+    grey2 = makegrey(frame_2)
+    dx = gradient(grey1,sobel['x'])
+    dy = gradient(grey1,sobel['y'])
+    dt = grey2-grey1
+
+    optical_flow = (lk(grey1, grey2, dx, dy, dt)).astype(np.float32)
+    optical_flow = np.moveaxis(optical_flow, 0, -1)
+    height, width = optical_flow.shape[0], optical_flow.shape[1]
+
+    optical_flow *= -1
+    interpolated_frame = motionify(frame_1, optical_flow)
+    cv2.imwrite('frame12.jpg',interpolated_frame)
+
+tempgen(img1, img2)
+
+
+
 
 
 def main():
