@@ -5,6 +5,7 @@ import numpy as np
 from tqdm import tqdm, trange
 import time
 
+# audio
 # proper interpolation output
 # priority 1: passing video segment times
 # priority 2: upload interpolated vid to mediafire
@@ -259,7 +260,7 @@ def corner_det(grey_frame, threshold_func):
     return corners, dx, dy
 
 
-def lk_nocorner(previmg, dx, dy, dt): #use for testing?
+def lk_nocorner(previmg, dx, dy, dt): #use for testing? show 6m compared 6s
     height, width = previmg.shape
     offset = len(sobel['x'])//2
     u = v = np.zeros_like(previmg)
