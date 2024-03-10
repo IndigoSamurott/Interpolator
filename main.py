@@ -1,13 +1,12 @@
 import warnings;warnings.filterwarnings("ignore")
 
-import cv2
+import cv2, multiprocessing
 import numpy as np
 from tqdm import tqdm, trange
 import time
 
 # audio
 # proper interpolation output
-# priority 1: passing video segment times
 # priority 2: upload interpolated vid to mediafire
 # priority 3: at frames in regular odd interval, hash frame data, hash table, mediafire link
 
@@ -162,7 +161,7 @@ def sort(inp):
 
 
 def makegrey(BGR): #cv2 decodes frames to BGR rather than RGB
-    return np.array([[0.114*j[0] + 0.587*j[1] + 0.299*j[2] for j in i] for i in tqdm(BGR, desc='Converting to greyscale')]) #weighted colours
+    return np.array([[0.114*j[0] + 0.587*j[1] + 0.299*j[2] for j in i] for i in tqdm(BGR, desc='Converting to greyscale', leave=False)]) #weighted colours
 
 def dot(a, b):
     a = np.array(a)
@@ -194,7 +193,7 @@ def gradient(grey_frame, kernel):
     np.array([
         [convolve(grey_frame[y-offset:y+offset+1, x-offset:x+offset+1], kernel) 
         for x in range(offset, width-offset)] 
-        for y in trange(offset, height-offset)
+        for y in trange(offset, height-offset, desc='Computing gradients', leave=False)
     ])
     return gradient_image
 
@@ -204,7 +203,7 @@ def adaptive_mean(pixel_responses, winsize): #thresholds corners in local neighb
     height, width = pixel_responses.shape
     corners = []
 
-    for x in trange(width, desc='Applying thresholds'):
+    for x in trange(width, desc='Applying thresholds', leave=False):
         for y in range(height):
 
             lower_x = max(0, x - offset) #setting edges of neighbourhood within image bounds
@@ -226,14 +225,12 @@ def adaptive_mean(pixel_responses, winsize): #thresholds corners in local neighb
 def corner_det(grey_frame, threshold_func):
     offset = len(sobel['x']) // 2
     height, width = grey_frame.shape
-    print("Computing x gradients:")
     dx = gradient(grey_frame, sobel['x'])
-    print("Computing y gradients:")
     dy = gradient(grey_frame, sobel['y'])
-
     dx2 = dx ** 2 ; dy2 = dy ** 2 ; dxdy = dx * dy
     potential_matrix = np.zeros_like(grey_frame)
-    for x in trange(offset, width - offset, desc='Rating corners'):
+
+    for x in trange(offset, width - offset, desc='Rating corners', leave=False):
         for y in range(offset, height - offset):
             # sum squared derivatives in a window
             window_dx2 = dx2[y - offset: y + offset + 1, x - offset: x + offset + 1]
@@ -252,20 +249,21 @@ def corner_det(grey_frame, threshold_func):
     corners = threshold_func(potential_matrix, len(sobel['x']))
 
     # visualise corners for testing  
-    marked_frame = cv2.cvtColor(grey_frame.astype(np.float32), cv2.COLOR_GRAY2BGR)  # convert grayscale frame to BGR, didn't work otherwise
+    """ marked_frame = cv2.cvtColor(grey_frame.astype(np.float32), cv2.COLOR_GRAY2BGR)  # convert grayscale frame to BGR, didn't work otherwise
     for corner in corners:
         x, y = corner[0]
         cv2.circle(marked_frame, (x, y), 1, (0, 0, 255), -1)
-    cv2.imwrite("corner_img.jpg", marked_frame)
+    cv2.imwrite("corner_img.jpg", marked_frame) """
+    
     return corners, dx, dy
 
 
-def lk_nocorner(previmg, dx, dy, dt): #use for testing? show 6m compared 6s
+def lk_nocorner(previmg, dx, dy, dt): #use for testing? show 6m compared 6s by removing leave clause
     height, width = previmg.shape
     offset = len(sobel['x'])//2
-    u = v = np.zeros_like(previmg)
+    u = np.zeros_like(previmg); v = u.copy()
 
-    for y in trange(offset, height - offset, desc='Finding flow'):
+    for y in trange(offset, height - offset, desc='Finding flow', leave=False):
         for x in range(offset, width - offset):
             nhood_dx = dx[y - offset: y + offset + 1, x - offset: x + offset + 1]
             nhood_dy = dy[y - offset: y + offset + 1, x - offset: x + offset + 1]
@@ -285,9 +283,9 @@ def lk_nocorner(previmg, dx, dy, dt): #use for testing? show 6m compared 6s
 def lk(previmg, dx, dy, dt, coords):
     height, width = previmg.shape
     offset = len(sobel['x'])//2
-    u = v = np.zeros((height, width))
+    u = np.zeros((height, width)); v = u.copy()
 
-    for i in tqdm(coords, desc='Finding flow'):
+    for i in tqdm(coords, desc='Finding flow', leave=False):
         for (y, x) in i:
             if offset <= y < height - offset and offset <= x < width - offset:
                 nhood_dx = dx[y - offset: y + offset + 1, x - offset: x + offset + 1]
@@ -315,7 +313,7 @@ def motionify(origin_img, flow): #nearest-neighbour pixel remap
     height, width = origin_img.shape[0], origin_img.shape[1]
     remapped = np.zeros_like(origin_img)
 
-    for y in trange(height, desc='Interpolating'):
+    for y in trange(height, desc='Interpolating', leave=False):
         for x in range(width):
             
             new_x, new_y = int(round(x + flow[y, x, 0])), int(round(y + flow[y, x, 1]))
@@ -328,20 +326,16 @@ def motionify(origin_img, flow): #nearest-neighbour pixel remap
     return remapped
 
 
-def interpolate(vid, segment):
-    t = time.perf_counter()
-    
-    frame_counter = 1
-    interpolated = cv2.VideoWriter('output.mp4', cv2.VideoWriter_fourcc(*'mp4v'), (vid.get(cv2.CAP_PROP_FPS)*2), (1920,1080)) 
-
-    while frame_counter <= segment[1]:
-
+def interpolate(path, segment):
+    output_list = []
+    vid = cv2.VideoCapture(path)
+    for frame_counter in trange(segment[0], segment[1]+1):
         successfully_read, frame = vid.read()
         if not successfully_read: #error check
             print('Failed whilst reading video.'); break
         
         if frame_counter == segment[0]:
-            interpolated.write(frame)
+            output_list.append(frame)
             grey_frame = makegrey(frame)
             prev_corner_points, dx, dy = corner_det(grey_frame, threshold_func=adaptive_mean)
             prev_frame = frame.copy()
@@ -354,15 +348,41 @@ def interpolate(vid, segment):
             optical_flow = lk(prev_grey, dx, dy, dt, prev_corner_points)
             optical_flow = np.moveaxis(optical_flow, 0, -1)
             interpolated_frame = motionify(prev_frame, optical_flow)
-            interpolated.write(interpolated_frame)
-            interpolated.write(frame)
+            output_list.append(interpolated_frame)
+            output_list.append(frame)
             prev_corner_points, dx, dy = corner_det(grey_frame, threshold_func=adaptive_mean)
             prev_frame = frame.copy()
 
-        frame_counter += 1
-    print(time.perf_counter()-t)
+    return output_list
+
+
+def process(path, segment):
+    t = time.perf_counter()
+    if segment[1] - segment[0] > 10: #only deal with pool overhead for longer clips
+        half1 = [segment[0], (segment[0] + segment[1]) // 2]
+        half2 = [(segment[0] + segment[1]) // 2 + 1, segment[1]]
+        pool = multiprocessing.Pool(2)
+        t = time.perf_counter()
+        
+        output_half1 = pool.apply_async(interpolate, args=(path, half1))
+        output_half2 = pool.apply_async(interpolate, args=(path, half2))
+        pool.close(); pool.join()
+        print(f'Took {time.strftime('%H:%M:%S', time.gmtime(round(time.perf_counter() - t)))}')
+
+        output = output_half1.get() + output_half2.get()
+    
+    else:
+        output = []
+        output = interpolate(path, output)
+        print(time.perf_counter() - t)
+
+    vid = cv2.VideoCapture(path)
+    interpolated = cv2.VideoWriter(f'INTERPOLATED_{path.split('\\')[-1].split('/')[-1]}.mp4', cv2.VideoWriter_fourcc(*'mp4v'), (vid.get(cv2.CAP_PROP_FPS)*2), (int(vid.get(cv2.CAP_PROP_FRAME_WIDTH)), int(vid.get(cv2.CAP_PROP_FRAME_HEIGHT))))
+
+    for frame in output:
+        interpolated.write(frame)
     interpolated.release()
-    pass
+    return
 
 
 #img1 = cv2.imread(r"C:\Users\deept_oeog1pt\Downloads\eval-color-allframes\eval-data\Army\frame11.png")
@@ -423,6 +443,7 @@ def batch_select():
                     hh, mm, ss = map(int, parts)
                     ms = 0
                 elif len(parts) == 4:
+                    parts[-1] = parts[-1].ljust(3, '0') #pad ms with 0s
                     hh, mm, ss, ms = map(int, parts)
                 else:
                     print("Invalid timestamp format. Try again.")
@@ -438,6 +459,7 @@ def batch_select():
                     hh, mm, ss = map(int, parts)
                     ms = 0
                 elif len(parts) == 4:
+                    parts[-1] = parts[-1].ljust(3, '0')
                     hh, mm, ss, ms = map(int, parts)
                 else:
                     print("Invalid timestamp format. Try again.")
@@ -445,7 +467,6 @@ def batch_select():
             except: #in case of non-int input
                 print("Invalid timestamp format. Try again.")
                 continue
-        
             frame2 = round((hh * 3600 + mm * 60 + ss) * fps  +  ms * (fps / 1000))
             if frame2 < 0 or frame2 > total_frames:
                 print("That's not within the video duration. Try again.")
@@ -479,10 +500,12 @@ def batch_select():
 
 
 def main():
+    global projects
     projects, fileframes = batch_select()
     while not projects.is_empty():
         print(f'\n(Video {(len(files) - projects.size() + 1)}/{len(files)})')
         print('>>>>>>>>>> ' + files[projects.peek()].split('\\')[-1].split('/')[-1] + ' <<<<<<<<<<\n')
-        interpolate(cv2.VideoCapture( files[projects.peek()] ), fileframes[projects.pop()])
+        process(files[projects.peek()], fileframes[projects.pop()])
 
-main()
+if __name__ == "__main__":
+    main()
