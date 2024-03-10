@@ -1,14 +1,40 @@
 import warnings;warnings.filterwarnings("ignore")
 
-import cv2, multiprocessing
+import cv2
 import numpy as np
+from multiprocessing import Pool
 from tqdm import tqdm, trange
-import time
 
+from google_auth_oauthlib.flow import InstalledAppFlow
+import googleapiclient.discovery
+
+# at frames in regular odd interval, hash frame data, hash table, gdrive link
+# 20.1 shwr
 # audio
-# proper interpolation output
-# priority 2: upload interpolated vid to mediafire
-# priority 3: at frames in regular odd interval, hash frame data, hash table, mediafire link
+
+
+def upload(file_path, drive_service):
+    try:        
+        folder_id = '1yHeaxE5etil3-XNS6JyXzH5GYzhDwPw4'
+
+        file_metadata = {
+            'name': file_path.replace('/','\\').split('\\')[-1],
+            'parents': [folder_id]
+        }
+
+        with open(file_path, 'rb') as file_obj:
+            media = googleapiclient.http.MediaIoBaseUpload(file_obj, mimetype='video/mp4', resumable=True)
+            file = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+
+            permission = {'type': 'anyone', 'role': 'reader'}
+            drive_service.permissions().create(fileId=file['id'], body=permission).execute()
+
+        return
+    
+    except Exception as e:
+        print(f'\nFailed to upload {file_path}:\n{e}')
+        return
+
 
 
 sobel = { 'x': np.array([[-1,  0,  1], 
@@ -261,7 +287,7 @@ def corner_det(grey_frame, threshold_func):
 def lk_nocorner(previmg, dx, dy, dt): #use for testing? show 6m compared 6s by removing leave clause
     height, width = previmg.shape
     offset = len(sobel['x'])//2
-    u = np.zeros_like(previmg); v = u.copy()
+    u = np.zeros_like(previmg); v = np.zeros_like(previmg)
 
     for y in trange(offset, height - offset, desc='Finding flow', leave=False):
         for x in range(offset, width - offset):
@@ -283,7 +309,7 @@ def lk_nocorner(previmg, dx, dy, dt): #use for testing? show 6m compared 6s by r
 def lk(previmg, dx, dy, dt, coords):
     height, width = previmg.shape
     offset = len(sobel['x'])//2
-    u = np.zeros((height, width)); v = u.copy()
+    u = np.zeros_like(previmg); v = np.zeros_like(previmg)
 
     for i in tqdm(coords, desc='Finding flow', leave=False):
         for (y, x) in i:
@@ -310,7 +336,7 @@ def lk(previmg, dx, dy, dt, coords):
     return flow
 
 def motionify(origin_img, flow): #nearest-neighbour pixel remap
-    height, width = origin_img.shape[0], origin_img.shape[1]
+    height, width = origin_img.shape[0], origin_img.shape[1] #
     remapped = np.zeros_like(origin_img)
 
     for y in trange(height, desc='Interpolating', leave=False):
@@ -327,15 +353,21 @@ def motionify(origin_img, flow): #nearest-neighbour pixel remap
 
 
 def interpolate(path, segment):
-    output_list = []
     vid = cv2.VideoCapture(path)
-    for frame_counter in trange(segment[0], segment[1]+1):
+    path_parts = path.replace('/','\\').split('\\')
+    directory = '' if len(path_parts) == 1 else '\\'.join(path_parts[:-1]) + '\\'
+    filename = path_parts[-1]
+    output_video_path = f'{directory}INTERPOLATED_{filename}'
+
+    interpolated = cv2.VideoWriter(output_video_path, cv2.VideoWriter_fourcc(*'mp4v'), (vid.get(cv2.CAP_PROP_FPS)*2), (int(vid.get(cv2.CAP_PROP_FRAME_WIDTH)), int(vid.get(cv2.CAP_PROP_FRAME_HEIGHT))))
+
+    for frame_counter in trange(segment[0], segment[1]+1, unit='frame'):
         successfully_read, frame = vid.read()
         if not successfully_read: #error check
             print('Failed whilst reading video.'); break
         
         if frame_counter == segment[0]:
-            output_list.append(frame)
+            interpolated.write(frame)
             grey_frame = makegrey(frame)
             prev_corner_points, dx, dy = corner_det(grey_frame, threshold_func=adaptive_mean)
             prev_frame = frame.copy()
@@ -348,49 +380,21 @@ def interpolate(path, segment):
             optical_flow = lk(prev_grey, dx, dy, dt, prev_corner_points)
             optical_flow = np.moveaxis(optical_flow, 0, -1)
             interpolated_frame = motionify(prev_frame, optical_flow)
-            output_list.append(interpolated_frame)
-            output_list.append(frame)
+            interpolated.write(interpolated_frame)
+            interpolated.write(frame)
             prev_corner_points, dx, dy = corner_det(grey_frame, threshold_func=adaptive_mean)
             prev_frame = frame.copy()
 
-    return output_list
-
-
-def process(path, segment):
-    t = time.perf_counter()
-    if segment[1] - segment[0] > 10: #only deal with pool overhead for longer clips
-        half1 = [segment[0], (segment[0] + segment[1]) // 2]
-        half2 = [(segment[0] + segment[1]) // 2 + 1, segment[1]]
-        pool = multiprocessing.Pool(2)
-        t = time.perf_counter()
-        
-        output_half1 = pool.apply_async(interpolate, args=(path, half1))
-        output_half2 = pool.apply_async(interpolate, args=(path, half2))
-        pool.close(); pool.join()
-        print(f'Took {time.strftime('%H:%M:%S', time.gmtime(round(time.perf_counter() - t)))}')
-
-        output = output_half1.get() + output_half2.get()
-    
-    else:
-        output = []
-        output = interpolate(path, output)
-        print(time.perf_counter() - t)
-
-    vid = cv2.VideoCapture(path)
-    interpolated = cv2.VideoWriter(f'INTERPOLATED_{path.split('\\')[-1].split('/')[-1]}.mp4', cv2.VideoWriter_fourcc(*'mp4v'), (vid.get(cv2.CAP_PROP_FPS)*2), (int(vid.get(cv2.CAP_PROP_FRAME_WIDTH)), int(vid.get(cv2.CAP_PROP_FRAME_HEIGHT))))
-
-    for frame in output:
-        interpolated.write(frame)
     interpolated.release()
-    return
+    return output_video_path
 
 
-#img1 = cv2.imread(r"C:\Users\deept_oeog1pt\Downloads\eval-color-allframes\eval-data\Army\frame11.png")
+#img1 = cv2.imread(r"C:\Users\deept_oeog1pt\Downloads\eval-color-allframes\eval-data\Army\frame11.png") #for eval
 #img2 = cv2.imread(r"C:\Users\deept_oeog1pt\Downloads\eval-color-allframes\eval-data\Army\frame12.png")
 img1 = cv2.imread('frame1.jpg')
 img2 = cv2.imread('frame3.jpg')
 
-""" def tempgen(frame_1, frame_2):
+""" def tempgen(frame_1, frame_2): #for testing lk times quickly
     grey1 = makegrey(frame_1)
     grey2 = makegrey(frame_2)
     corners, dx, dy = corner_det(grey1, adaptive_mean)
@@ -403,7 +407,7 @@ tempgen(img1, img2) """
 
 
 def batch_select():
-    global files; files = {}; fileframes = {}
+    files = {}; fileframes = {}
     while True:
         path = input('\nEnter a file path: ').replace('"','') #windows applies quotes around path
         if not path:
@@ -491,21 +495,35 @@ def batch_select():
         files[segment_size] = path
         fileframes[segment_size] = [frame1, frame2]
 
-    nextvids = stack(len(files))
-
-    for i in (sort(files))[::-1]:
-        nextvids.push(i)
-    return nextvids, fileframes
+    return files, fileframes
 
 
 
 def main():
-    global projects
-    projects, fileframes = batch_select()
+    gflow = InstalledAppFlow.from_client_secrets_file('credentials.json', ['https://www.googleapis.com/auth/drive'])
+    creds = gflow.run_local_server(port=0)
+    drive_service = googleapiclient.discovery.build('drive', 'v3', credentials=creds)
+
+    files, fileframes = batch_select()
+
+    projects = stack(len(files))
+    for i in (sort(files))[::-1]:
+        projects.push(i)
+
+    pool = Pool()
     while not projects.is_empty():
         print(f'\n(Video {(len(files) - projects.size() + 1)}/{len(files)})')
-        print('>>>>>>>>>> ' + files[projects.peek()].split('\\')[-1].split('/')[-1] + ' <<<<<<<<<<\n')
-        process(files[projects.peek()], fileframes[projects.pop()])
+        print('>>>>>>>>>> ' + files[projects.peek()].replace('/','\\').split('\\')[-1] + ' <<<<<<<<<<\n')
+        output = interpolate( files[projects.peek()] , fileframes[projects.pop()] )
 
-if __name__ == "__main__":
+        pool.apply_async(upload, (output, drive_service)) #submit upload tasks to separate processes without blocking main
+
+    pool.close()
+    pool.join()
+
+    print(f'\nAll done! Find your new file{'s' if len(files) > 1 else ''} in {'their' if len(files) > 1 else 'its'} original director{'ies' if len(files) > 1 else 'y'}, or download {'them'  if len(files) > 1 else 'it'} at:\nhttps://drive.google.com/drive/folders/1yHeaxE5etil3-XNS6JyXzH5GYzhDwPw4?usp=sharing\n')
+
+
+
+if __name__ == "__main__": #ensuring main process
     main()
