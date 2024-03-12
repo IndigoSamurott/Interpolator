@@ -3,38 +3,53 @@ import warnings;warnings.filterwarnings("ignore")
 import cv2
 import numpy as np
 from multiprocessing import Pool
+import subprocess
+import pickle
 from tqdm import tqdm, trange
 
 from google_auth_oauthlib.flow import InstalledAppFlow
 import googleapiclient.discovery
 
-# at frames in regular odd interval, hash frame data, hash table, gdrive link
-# 20.1 shwr
-# audio
+
+#img1 = cv2.imread(r"C:\Users\deept_oeog1pt\Downloads\eval-color-allframes\eval-data\Army\frame11.png") #for eval
+#img2 = cv2.imread(r"C:\Users\deept_oeog1pt\Downloads\eval-color-allframes\eval-data\Army\frame12.png")
+""" img1 = cv2.imread('frame1.jpg')
+img2 = cv2.imread('frame3.jpg')
+
+def tempgen(frame_1, frame_2): #for testing lk times quickly
+    grey1 = makegrey(frame_1)
+    grey2 = makegrey(frame_2)
+    corners, dx, dy = corner_det(grey1, adaptive_mean)
+    dt = grey2-grey1
+    optical_flow = lk(grey1, dx, dy, dt, corners)
+    optical_flow = np.moveaxis(optical_flow, 0, -1)
+    interpolated_frame = motionify(frame_1, optical_flow)
+    cv2.imwrite('framexgen.jpg',interpolated_frame)
+tempgen(img1, img2) """
 
 
-def upload(file_path, drive_service):
-    try:        
-        folder_id = '1yHeaxE5etil3-XNS6JyXzH5GYzhDwPw4'
 
-        file_metadata = {
-            'name': file_path.replace('/','\\').split('\\')[-1],
-            'parents': [folder_id]
-        }
+""" def lk_nocorner(previmg, dx, dy, dt): #use for testing? show 6m compared 6s by removing leave clause
+    height, width = previmg.shape
+    offset = len(sobel['x'])//2
+    u = np.zeros_like(previmg); v = np.zeros_like(previmg)
 
-        with open(file_path, 'rb') as file_obj:
-            media = googleapiclient.http.MediaIoBaseUpload(file_obj, mimetype='video/mp4', resumable=True)
-            file = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+    for y in trange(offset, height - offset, desc='Finding flow', leave=False):
+        for x in range(offset, width - offset):
+            nhood_dx = dx[y - offset: y + offset + 1, x - offset: x + offset + 1]
+            nhood_dy = dy[y - offset: y + offset + 1, x - offset: x + offset + 1]
+            nhood_dt = dt[y - offset: y + offset + 1, x - offset: x + offset + 1]
+            S = np.array([nhood_dx, nhood_dy]).reshape(-1, 2)
+            S_T = [[row[i] for row in S] for i in range(len(S[0]))] #transposed; flipped along diagonal
+            S_ST = dot(S_T, S)
 
-            permission = {'type': 'anyone', 'role': 'reader'}
-            drive_service.permissions().create(fileId=file['id'], body=permission).execute()
+            inv_SST = np.linalg.pinv(S_ST) #pseudo-inverse works on ill-conditioned matrices
 
-        return
+            u[y, x], v[y, x] = dot(dot(inv_SST, S_T), nhood_dt.reshape(9,-1))
+
     
-    except Exception as e:
-        print(f'\nFailed to upload {file_path}:\n{e}')
-        return
-
+    flow = np.array([u, v])*10
+    return flow """
 
 
 sobel = { 'x': np.array([[-1,  0,  1], 
@@ -186,9 +201,6 @@ def sort(inp):
     return inp
 
 
-def makegrey(BGR): #cv2 decodes frames to BGR rather than RGB
-    return np.array([[0.114*j[0] + 0.587*j[1] + 0.299*j[2] for j in i] for i in tqdm(BGR, desc='Converting to greyscale', leave=False)]) #weighted colours
-
 def dot(a, b):
     a = np.array(a)
     b = np.array(b)
@@ -200,6 +212,11 @@ def dot(a, b):
                 product[i][j] += a[i][k] * b[k][j]
 
     return product
+
+
+def makegrey(BGR): #cv2 decodes frames to BGR rather than RGB
+    return np.array([[0.114*j[0] + 0.587*j[1] + 0.299*j[2] for j in i] for i in
+                     tqdm(BGR, desc='Converting to greyscale', leave=False)]) #weighted colours
 
 
 def convolve(imgwin, kernel):
@@ -275,7 +292,8 @@ def corner_det(grey_frame, threshold_func):
     corners = threshold_func(potential_matrix, len(sobel['x']))
 
     # visualise corners for testing  
-    """ marked_frame = cv2.cvtColor(grey_frame.astype(np.float32), cv2.COLOR_GRAY2BGR)  # convert grayscale frame to BGR, didn't work otherwise
+    """ marked_frame = cv2.cvtColor(grey_frame.astype(np.float32), cv2.COLOR_GRAY2BGR)
+        # convert grayscale frame to BGR, didn't work otherwise
     for corner in corners:
         x, y = corner[0]
         cv2.circle(marked_frame, (x, y), 1, (0, 0, 255), -1)
@@ -284,35 +302,13 @@ def corner_det(grey_frame, threshold_func):
     return corners, dx, dy
 
 
-def lk_nocorner(previmg, dx, dy, dt): #use for testing? show 6m compared 6s by removing leave clause
-    height, width = previmg.shape
+def lk(prev_img, dx, dy, dt, coords):
+    height, width = prev_img.shape
     offset = len(sobel['x'])//2
-    u = np.zeros_like(previmg); v = np.zeros_like(previmg)
-
-    for y in trange(offset, height - offset, desc='Finding flow', leave=False):
-        for x in range(offset, width - offset):
-            nhood_dx = dx[y - offset: y + offset + 1, x - offset: x + offset + 1]
-            nhood_dy = dy[y - offset: y + offset + 1, x - offset: x + offset + 1]
-            nhood_dt = dt[y - offset: y + offset + 1, x - offset: x + offset + 1]
-            S = np.array([nhood_dx, nhood_dy]).reshape(-1, 2)
-            S_T = [[row[i] for row in S] for i in range(len(S[0]))] #transposed; flipped along diagonal
-            S_ST = dot(S_T, S)
-
-            inv_SST = np.linalg.pinv(S_ST) #pseudo-inverse works on ill-conditioned matrices
-
-            u[y, x], v[y, x] = dot(dot(inv_SST, S_T), nhood_dt.reshape(9,-1))
-
-    
-    flow = np.array([u, v])*10
-    return flow
-
-def lk(previmg, dx, dy, dt, coords):
-    height, width = previmg.shape
-    offset = len(sobel['x'])//2
-    u = np.zeros_like(previmg); v = np.zeros_like(previmg)
+    u = np.zeros_like(prev_img); v = np.zeros_like(prev_img)
 
     for i in tqdm(coords, desc='Finding flow', leave=False):
-        for (y, x) in i:
+        for (x, y) in i:
             if offset <= y < height - offset and offset <= x < width - offset:
                 nhood_dx = dx[y - offset: y + offset + 1, x - offset: x + offset + 1]
                 nhood_dy = dy[y - offset: y + offset + 1, x - offset: x + offset + 1]
@@ -354,12 +350,21 @@ def motionify(origin_img, flow): #nearest-neighbour pixel remap
 
 def interpolate(path, segment):
     vid = cv2.VideoCapture(path)
+    vid.set(cv2.CAP_PROP_POS_FRAMES, segment[0]-1) #seek to the first timestamp
+
     path_parts = path.replace('/','\\').split('\\')
     directory = '' if len(path_parts) == 1 else '\\'.join(path_parts[:-1]) + '\\'
     filename = path_parts[-1]
-    output_video_path = f'{directory}INTERPOLATED_{filename}'
+    temp_path = f'{directory}temp_{filename}' #for video without audio
+    output_path = f'{directory}INTERPOLATED_{filename}'
 
-    interpolated = cv2.VideoWriter(output_video_path, cv2.VideoWriter_fourcc(*'mp4v'), (vid.get(cv2.CAP_PROP_FPS)*2), (int(vid.get(cv2.CAP_PROP_FRAME_WIDTH)), int(vid.get(cv2.CAP_PROP_FRAME_HEIGHT))))
+    start_time = segment[0] / vid.get(cv2.CAP_PROP_FPS)
+    duration = (segment[1] - segment[0]) / vid.get(cv2.CAP_PROP_FPS)
+    audio_path = f'{directory}AUDIO_{filename}' #temp extracted audio
+    subprocess.run(f'ffmpeg -y -i "{path}" -ss {start_time} -t {duration} -vn -loglevel fatal "{audio_path}"')
+    
+    interpolated = cv2.VideoWriter(temp_path, cv2.VideoWriter_fourcc(*'mp4v'), (vid.get(cv2.CAP_PROP_FPS)*2),
+                                (int(vid.get(cv2.CAP_PROP_FRAME_WIDTH)), int(vid.get(cv2.CAP_PROP_FRAME_HEIGHT))))
 
     for frame_counter in trange(segment[0], segment[1]+1, unit='frame'):
         successfully_read, frame = vid.read()
@@ -385,25 +390,59 @@ def interpolate(path, segment):
             prev_corner_points, dx, dy = corner_det(grey_frame, threshold_func=adaptive_mean)
             prev_frame = frame.copy()
 
+    vid.release()
     interpolated.release()
-    return output_video_path
+
+    subprocess.run(f'ffmpeg -y -i "{temp_path}" -i "{audio_path}" -c copy "{output_path}" -loglevel fatal')
+    subprocess.run(f'del "{temp_path}" "{audio_path}"', shell=True)
+    return output_path
+
+# But if the contents of the file don't change very often, it may be worthwhile to store the data in a form
+# which is easier for Python to read than plain text. The pickle module takes any Python object and writes it to 
+# a file in a format which Python can later read back into memory in an efficient way.
+def check_history(id):
+    try:
+        with open('past_videos.pkl', 'rb') as f:
+            history = pickle.load(f)
+        if id in history:
+            return True, history
+        else:
+            return False, history
+    except FileNotFoundError:
+        return False, {}
+    
+def save_result(vid_id, history, drive_link):
+    history[vid_id] = drive_link
+    with open('past_videos.pkl', 'wb') as f:
+        pickle.dump(history, f)
 
 
-#img1 = cv2.imread(r"C:\Users\deept_oeog1pt\Downloads\eval-color-allframes\eval-data\Army\frame11.png") #for eval
-#img2 = cv2.imread(r"C:\Users\deept_oeog1pt\Downloads\eval-color-allframes\eval-data\Army\frame12.png")
-img1 = cv2.imread('frame1.jpg')
-img2 = cv2.imread('frame3.jpg')
 
-""" def tempgen(frame_1, frame_2): #for testing lk times quickly
-    grey1 = makegrey(frame_1)
-    grey2 = makegrey(frame_2)
-    corners, dx, dy = corner_det(grey1, adaptive_mean)
-    dt = grey2-grey1
-    optical_flow = lk(grey1, dx, dy, dt, corners)
-    optical_flow = np.moveaxis(optical_flow, 0, -1)
-    interpolated_frame = motionify(frame_1, optical_flow)
-    cv2.imwrite('framexgen.jpg',interpolated_frame)
-tempgen(img1, img2) """
+
+def upload(file_path, drive_service, local_store):
+    try:        
+        folder_id = '1yHeaxE5etil3-XNS6JyXzH5GYzhDwPw4'
+
+        file_metadata = {
+            'name': file_path.replace('/','\\').split('\\')[-1],
+            'parents': [folder_id]
+        }
+
+        with open(file_path, 'rb') as file_obj:
+            media = googleapiclient.http.MediaIoBaseUpload(file_obj, mimetype='video/mp4', resumable=True)
+            file = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+
+            permission = {'type': 'anyone', 'role': 'reader'}
+            drive_service.permissions().create(fileId=file['id'], body=permission).execute()
+
+            if local_store[0]:
+                save_result(local_store[1], local_store[2], f'https://drive.google.com/file/d/{file["id"]}/view?usp=sharing')
+
+        return
+    
+    except Exception as e:
+        print(f'\nFailed to upload {file_path}:\n{e}')
+        return
 
 
 def batch_select():
@@ -412,12 +451,13 @@ def batch_select():
         path = input('\nEnter a file path: ').replace('"','') #windows applies quotes around path
         if not path:
             if len(files) == 0: continue #no initial input
-            else: break
+            else: validcheck.release(); break
 
+        
         validcheck = cv2.VideoCapture(path)
         if not validcheck.isOpened(): #error check
             print("There's no video in that location. Try again.")
-            validcheck.release(); continue
+            continue
 
         total_frames = int(validcheck.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = validcheck.get(cv2.CAP_PROP_FPS)
@@ -425,20 +465,19 @@ def batch_select():
         successfully_read, frame1 = validcheck.read()
         if not successfully_read: #error check
             print("Could not read that video.")
-            validcheck.release(); continue
+            continue
         
         frame1 = cv2.imencode('.jpg', frame1)
         if not frame1[0]: #error check
             print('Errored whilst parsing that video.')
-            validcheck.release(); continue
-        validcheck.release()
+            continue
         
         frame_size = len(frame1[1].tobytes())
 
         segment_choice = input('Would you like to interpolate that between specific timestamps? [Y/N]: ')
         if segment_choice.lower() != 'y':
-            frame1 = 1
-            frame2 = total_frames
+            start_frame = 1
+            end_frame = total_frames
         else:
             try:
                 timestamp1 = input('Enter first timestamp  (HH:MM:SS[:ms]): ')
@@ -452,8 +491,8 @@ def batch_select():
                 else:
                     print("Invalid timestamp format. Try again.")
                     continue
-                frame1 = round((hh * 3600 + mm * 60 + ss) * fps  +  ms * (fps / 1000))
-                if frame1 < 0 or frame1 > total_frames:
+                start_frame = round((hh * 3600 + mm * 60 + ss) * fps  +  ms * (fps / 1000))
+                if start_frame < 0 or start_frame > total_frames:
                     print("That's not within the video duration. Try again.")
                     continue
 
@@ -471,57 +510,80 @@ def batch_select():
             except: #in case of non-int input
                 print("Invalid timestamp format. Try again.")
                 continue
-            frame2 = round((hh * 3600 + mm * 60 + ss) * fps  +  ms * (fps / 1000))
-            if frame2 < 0 or frame2 > total_frames:
+            end_frame = round((hh * 3600 + mm * 60 + ss) * fps  +  ms * (fps / 1000))
+            if end_frame < 0 or end_frame > total_frames:
                 print("That's not within the video duration. Try again.")
                 continue
-            elif frame2 == frame1:
+            elif end_frame == start_frame:
                 print('The second timestamp must be further along. Try again.')
                 continue
-            elif frame2 < frame1:
-                frame1, frame2 = frame2, frame1
-        frame1 = frame1 if (frame1 > 0) else 1
-        frame2 = frame2 if (frame2 > 1) else 2
+            elif end_frame < start_frame:
+                start_frame, end_frame = end_frame, start_frame
+        start_frame = start_frame if (start_frame > 0) else 1
+        end_frame = end_frame if (end_frame > 1) else 2
 
-        segment_size = (frame2 - frame1) * frame_size
+        segment_size = (end_frame - start_frame) * frame_size
+
+        validcheck.set(cv2.CAP_PROP_POS_FRAMES, start_frame-1)
+        id_frame_1 = np.sum(validcheck.read()[1])
+        id_frame_2 = np.sum(validcheck.read()[1])
+        #if an interpolated result is interpolated again, this will differ
+        id = (path.replace('/','\\').split('\\')[-1], segment_size, id_frame_1, id_frame_2) 
+        #identifies the task params for future
+
+        done, history = check_history(id)
+        if done:
+            cont = input("\nYou seem to have requested this before! The previous result was saved at:"
+                         f"\n{history[id]}"
+                         "\nWould you like to continue anyways? [Y/N]: ")
+            if cont.lower() != 'y':
+                continue
 
         while True: #if not unique then decrease priority by one
             try:
-                x = files[segment_size]
+                _ = files[segment_size]
                 segment_size +=1
             except:
                 break
 
         files[segment_size] = path
-        fileframes[segment_size] = [frame1, frame2]
+        fileframes[segment_size] = (start_frame, end_frame, id)
+        print('File added.')
 
-    return files, fileframes
+    return files, fileframes, history
 
 
 
 def main():
-    gflow = InstalledAppFlow.from_client_secrets_file('credentials.json', ['https://www.googleapis.com/auth/drive'])
+    gflow = InstalledAppFlow.from_client_secrets_file('credentials.json', 
+                                                      ['https://www.googleapis.com/auth/drive'])
     creds = gflow.run_local_server(port=0)
     drive_service = googleapiclient.discovery.build('drive', 'v3', credentials=creds)
 
-    files, fileframes = batch_select()
+    files, fileframes, history = batch_select()
 
     projects = stack(len(files))
     for i in (sort(files))[::-1]:
         projects.push(i)
 
-    pool = Pool()
+    pool = Pool() #no limit bc https://stackoverflow.com/a/68790989
     while not projects.is_empty():
         print(f'\n(Video {(len(files) - projects.size() + 1)}/{len(files)})')
         print('>>>>>>>>>> ' + files[projects.peek()].replace('/','\\').split('\\')[-1] + ' <<<<<<<<<<\n')
-        output = interpolate( files[projects.peek()] , fileframes[projects.pop()] )
+        output = interpolate( files[projects.peek()] , fileframes[projects.peek()] )
 
-        pool.apply_async(upload, (output, drive_service)) #submit upload tasks to separate processes without blocking main
+        new_result = True if fileframes[projects.peek()][2] not in history else False #id
+        local_storage_status = (new_result, fileframes[projects.pop()][2], history)
+        pool.apply_async(upload, (output, drive_service, local_storage_status))
+                         #submit upload tasks to separate processes without blocking main
 
     pool.close()
     pool.join()
 
-    print(f'\nAll done! Find your new file{'s' if len(files) > 1 else ''} in {'their' if len(files) > 1 else 'its'} original director{'ies' if len(files) > 1 else 'y'}, or download {'them'  if len(files) > 1 else 'it'} at:\nhttps://drive.google.com/drive/folders/1yHeaxE5etil3-XNS6JyXzH5GYzhDwPw4?usp=sharing\n')
+    print(f'\n\nAll done! Find your new file{'s' if len(files) > 1 else ''} in '
+          f'{'their' if len(files) > 1 else 'its'} original director{'ies' if len(files) > 1 else 'y'},'
+          f'or download {'them'  if len(files) > 1 else 'it'} at:\n'
+            'https://drive.google.com/drive/folders/1yHeaxE5etil3-XNS6JyXzH5GYzhDwPw4?usp=sharing\n')
 
 
 
