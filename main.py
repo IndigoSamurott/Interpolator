@@ -4,59 +4,18 @@ import cv2
 import numpy as np
 from multiprocessing import Pool
 import subprocess
-import pickle
+import pickle, requests
 from tqdm import tqdm, trange
 
 from google_auth_oauthlib.flow import InstalledAppFlow
 import googleapiclient.discovery
 
 
-#img1 = cv2.imread(r"C:\Users\deept_oeog1pt\Downloads\eval-color-allframes\eval-data\Army\frame11.png") #for eval
-#img2 = cv2.imread(r"C:\Users\deept_oeog1pt\Downloads\eval-color-allframes\eval-data\Army\frame12.png")
-""" img1 = cv2.imread('frame1.jpg')
-img2 = cv2.imread('frame3.jpg')
-
-def tempgen(frame_1, frame_2): #for testing lk times quickly
-    grey1 = makegrey(frame_1)
-    grey2 = makegrey(frame_2)
-    corners, dx, dy = corner_det(grey1, adaptive_mean)
-    dt = grey2-grey1
-    optical_flow = lk(grey1, dx, dy, dt, corners)
-    optical_flow = np.moveaxis(optical_flow, 0, -1)
-    interpolated_frame = motionify(frame_1, optical_flow)
-    cv2.imwrite('framexgen.jpg',interpolated_frame)
-tempgen(img1, img2) """
-
-
-
-""" def lk_nocorner(previmg, dx, dy, dt): #use for testing? show 6m compared 6s by removing leave clause
-    height, width = previmg.shape
-    offset = len(sobel['x'])//2
-    u = np.zeros_like(previmg); v = np.zeros_like(previmg)
-
-    for y in trange(offset, height - offset, desc='Finding flow', leave=False):
-        for x in range(offset, width - offset):
-            nhood_dx = dx[y - offset: y + offset + 1, x - offset: x + offset + 1]
-            nhood_dy = dy[y - offset: y + offset + 1, x - offset: x + offset + 1]
-            nhood_dt = dt[y - offset: y + offset + 1, x - offset: x + offset + 1]
-            S = np.array([nhood_dx, nhood_dy]).reshape(-1, 2)
-            S_T = [[row[i] for row in S] for i in range(len(S[0]))] #transposed; flipped along diagonal
-            S_ST = dot(S_T, S)
-
-            inv_SST = np.linalg.pinv(S_ST) #pseudo-inverse works on ill-conditioned matrices
-
-            u[y, x], v[y, x] = dot(dot(inv_SST, S_T), nhood_dt.reshape(9,-1))
-
-    
-    flow = np.array([u, v])*10
-    return flow """
-
-
 sobel = { 'x': np.array([[-1,  0,  1], 
                          [-2,  0,  2], 
                          [-1,  0,  1]
                        ]),
-          'y': np.array([[-1, -2, -1], 
+          'y': np.array([[-1,  2,  -1], 
                          [ 0,  0,  0], 
                          [ 1,  2,  1]
                        ]) }
@@ -72,7 +31,8 @@ class data_type:
     def pop(self):
         if self.is_empty():
             return None
-        return self.data.pop()
+        else:
+            return self.data.pop()
 
     def peek(self):
         if self.is_empty():
@@ -93,7 +53,7 @@ class stack(data_type):
         self.__length = length
 
     def push(self, item):
-        if self.size() <= self.__length: #static size constraint
+        if self.size() < self.__length: #static size constraint
             super().push(item)
         else:
             raise Exception("Stack overflow")
@@ -120,25 +80,25 @@ class heap(data_type):
         if smallest != currentindex:
             self.data[currentindex], self.data[smallest] = self.data[smallest], self.data[currentindex] #swap
             self.heapify(smallest)
+
+    def push(self, item):
+        super().push(item)
+        i = self.size() - 1
+        while i > 0 and self.data[i] < self.data[(i - 1) // 2]: #if smaller than its parent
+            self.data[i], self.data[(i - 1) // 2] = self.data[(i - 1) // 2], self.data[i] #swap
+            i = (i - 1) // 2
         
     def pop(self):
         if self.size() == 0:
             return None
 
-        root = self.data[0]
+        root = self.data[0] #the data we want
         last_node = super().pop()
         if self.size() > 0:
             self.data[0] = last_node
-            self.heapify(0)
+            self.heapify(0) #rebuild structure
 
         return root
-
-    def push(self, item):
-        super().push(item)
-        i = self.size() - 1
-        while i > 0 and self.data[i] < self.data[(i - 1) // 2]:
-            self.data[i], self.data[(i - 1) // 2] = self.data[(i - 1) // 2], self.data[i]
-            i = (i - 1) // 2
         
     def peek(self):
         if self.is_empty():
@@ -147,7 +107,7 @@ class heap(data_type):
           return self.data[0]
 
 
-def insertion_sort(inp): #O(n²), best for small lists because little overhead (no recursion)
+def insertion_sort(inp):
     for i in range(1, len(inp)):
         temp = inp[i]
         j = i-1
@@ -157,24 +117,24 @@ def insertion_sort(inp): #O(n²), best for small lists because little overhead (
         inp[j + 1] = temp
     return inp
 
-def heapsort(inp): #O(nlogn) for unusual cases where quicksort goes wrong
+def heapsort(inp):
     out = []
     theheap = heap()
     for i in inp:
-        theheap.push(i)
+        theheap.push(i) #will autosort
 
     while not theheap.is_empty():
         out.append(theheap.pop())
     
     return out
 
-def introsort(inp, maxdepth): #introspective
+def introsort(inp, maxdepth):
     if len(inp) < 16:
         insertion_sort(inp)
     elif maxdepth == 0:
         heapsort(inp)
     else:
-        #quicksort logic adapted for depth constraint, avg O(nlogn) worst O(n2)
+        #quicksort logic adapted for depth constraint
         pivot = inp[0]
         left = []
         equal = []
@@ -204,7 +164,7 @@ def sort(inp):
 def dot(a, b):
     a = np.array(a)
     b = np.array(b)
-    product = np.zeros((a.shape[0],b.shape[1]))
+    product = np.zeros((a.shape[0], b.shape[1]))
 
     for i in range(len(a)):
         for j in range(len(b[0])):
@@ -258,7 +218,7 @@ def adaptive_mean(pixel_responses, winsize): #thresholds corners in local neighb
             mean = np.sum(nhood)//winsize**2
             sumsq = sum(x**2 for y in nhood for x in y)
             standard_dev = (sumsq/winsize**2 - mean**2) ** 0.5
-            thresh = mean + 1*standard_dev #set to like 2.25 for testing as well as 1 for tuneability
+            thresh = mean + standard_dev
             if pixel_responses[y, x] > thresh:
                 corners.append([(x, y)])
 
@@ -291,14 +251,6 @@ def corner_det(grey_frame, threshold_func):
 
     corners = threshold_func(potential_matrix, len(sobel['x']))
 
-    # visualise corners for testing  
-    """ marked_frame = cv2.cvtColor(grey_frame.astype(np.float32), cv2.COLOR_GRAY2BGR)
-        # convert grayscale frame to BGR, didn't work otherwise
-    for corner in corners:
-        x, y = corner[0]
-        cv2.circle(marked_frame, (x, y), 1, (0, 0, 255), -1)
-    cv2.imwrite("corner_img.jpg", marked_frame) """
-    
     return corners, dx, dy
 
 
@@ -309,7 +261,7 @@ def lk(prev_img, dx, dy, dt, coords):
 
     for i in tqdm(coords, desc='Finding flow', leave=False):
         for (x, y) in i:
-            if offset <= y < height - offset and offset <= x < width - offset:
+            if offset <= y < (height - offset) and offset <= x < (width - offset):
                 nhood_dx = dx[y - offset: y + offset + 1, x - offset: x + offset + 1]
                 nhood_dy = dy[y - offset: y + offset + 1, x - offset: x + offset + 1]
                 nhood_dt = dt[y - offset: y + offset + 1, x - offset: x + offset + 1]
@@ -331,8 +283,8 @@ def lk(prev_img, dx, dy, dt, coords):
     flow = np.array([u, v])*10
     return flow
 
-def motionify(origin_img, flow): #nearest-neighbour pixel remap
-    height, width = origin_img.shape[0], origin_img.shape[1] #
+def motionify(origin_img, flow): #pixel remap
+    height, width = origin_img.shape[0], origin_img.shape[1]
     remapped = np.zeros_like(origin_img)
 
     for y in trange(height, desc='Interpolating', leave=False):
@@ -353,14 +305,14 @@ def interpolate(path, segment):
     vid.set(cv2.CAP_PROP_POS_FRAMES, segment[0]-1) #seek to the first timestamp
 
     path_parts = path.replace('/','\\').split('\\')
-    directory = '' if len(path_parts) == 1 else '\\'.join(path_parts[:-1]) + '\\'
+    directory = '' if len(path_parts) == 1 else '\\'.join(path_parts[:-1]) + '\\' #without filename
     filename = path_parts[-1]
     temp_path = f'{directory}temp_{filename}' #for video without audio
+    audio_path = f'{directory}AUDIO_{filename}' #temp extracted audio
     output_path = f'{directory}INTERPOLATED_{filename}'
 
-    start_time = segment[0] / vid.get(cv2.CAP_PROP_FPS)
-    duration = (segment[1] - segment[0]) / vid.get(cv2.CAP_PROP_FPS)
-    audio_path = f'{directory}AUDIO_{filename}' #temp extracted audio
+    start_time = segment[0] / vid.get(cv2.CAP_PROP_FPS) #in secs
+    duration = (segment[1] - segment[0]) / vid.get(cv2.CAP_PROP_FPS) #in secs
     subprocess.run(f'ffmpeg -y -i "{path}" -ss {start_time} -t {duration} -vn -loglevel fatal "{audio_path}"')
     
     interpolated = cv2.VideoWriter(temp_path, cv2.VideoWriter_fourcc(*'mp4v'), (vid.get(cv2.CAP_PROP_FPS)*2),
@@ -374,32 +326,29 @@ def interpolate(path, segment):
         if frame_counter == segment[0]:
             interpolated.write(frame)
             grey_frame = makegrey(frame)
-            prev_corner_points, dx, dy = corner_det(grey_frame, threshold_func=adaptive_mean)
+            prev_corners, dx, dy = corner_det(grey_frame, threshold_func=adaptive_mean)
             prev_frame = frame.copy()
 
         elif segment[0] < frame_counter:
             prev_grey = grey_frame.copy()
             grey_frame = makegrey(frame)
             dt = grey_frame - prev_grey
-            #optical_flow = lk_nocorner(prev_grey, dx, dy, dt)
-            optical_flow = lk(prev_grey, dx, dy, dt, prev_corner_points)
+            optical_flow = lk(prev_grey, dx, dy, dt, prev_corners)
             optical_flow = np.moveaxis(optical_flow, 0, -1)
             interpolated_frame = motionify(prev_frame, optical_flow)
             interpolated.write(interpolated_frame)
             interpolated.write(frame)
-            prev_corner_points, dx, dy = corner_det(grey_frame, threshold_func=adaptive_mean)
+            prev_corners, dx, dy = corner_det(grey_frame, threshold_func=adaptive_mean)
             prev_frame = frame.copy()
 
     vid.release()
     interpolated.release()
 
     subprocess.run(f'ffmpeg -y -i "{temp_path}" -i "{audio_path}" -c copy "{output_path}" -loglevel fatal')
-    subprocess.run(f'del "{temp_path}" "{audio_path}"', shell=True)
+    subprocess.run(f'del "{temp_path}" "{audio_path}"', shell=True) #append audio to video then delete temp files
     return output_path
 
-# But if the contents of the file don't change very often, it may be worthwhile to store the data in a form
-# which is easier for Python to read than plain text. The pickle module takes any Python object and writes it to 
-# a file in a format which Python can later read back into memory in an efficient way.
+
 def check_history(id):
     try:
         with open('past_videos.pkl', 'rb') as f:
@@ -417,30 +366,40 @@ def save_result(vid_id, history, drive_link):
         pickle.dump(history, f)
 
 
-
-
 def upload(file_path, drive_service, local_store):
     try:        
         folder_id = '1yHeaxE5etil3-XNS6JyXzH5GYzhDwPw4'
 
         file_metadata = {
-            'name': file_path.replace('/','\\').split('\\')[-1],
+            'name': file_path.replace('/','\\').split('\\')[-1], #filename from path
             'parents': [folder_id]
         }
 
-        with open(file_path, 'rb') as file_obj:
-            media = googleapiclient.http.MediaIoBaseUpload(file_obj, mimetype='video/mp4', resumable=True)
+        with open(file_path, 'rb') as f:
+            media = googleapiclient.http.MediaIoBaseUpload(f, mimetype='video/mp4', resumable=True)
             file = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
 
-            permission = {'type': 'anyone', 'role': 'reader'}
-            drive_service.permissions().create(fileId=file['id'], body=permission).execute()
+        permission = {'type': 'anyone', 'role': 'reader'}
+        drive_service.permissions().create(fileId=file['id'], body=permission).execute()
+        link = f'https://drive.google.com/file/d/{file["id"]}/view?usp=sharing'
 
-            if local_store[0]:
-                save_result(local_store[1], local_store[2], f'https://drive.google.com/file/d/{file["id"]}/view?usp=sharing')
+
+        headers = { #as per smolurl api docs
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+        }
+        data = {"url": link}
+
+        response = requests.post("https://smolurl.com/api/links", headers=headers, json=data)
+
+        if response.status_code == 201:
+            save_result(local_store[0], local_store[1], response.json()['data']['short_url']) #store w/ smol
+        else:
+            save_result(local_store[0], local_store[1], link) #store w/ drive
 
         return
     
-    except Exception as e:
+    except Exception as e: #for any network problem etc
         print(f'\nFailed to upload {file_path}:\n{e}')
         return
 
@@ -526,10 +485,8 @@ def batch_select():
 
         validcheck.set(cv2.CAP_PROP_POS_FRAMES, start_frame-1)
         id_frame_1 = np.sum(validcheck.read()[1])
-        id_frame_2 = np.sum(validcheck.read()[1])
-        #if an interpolated result is interpolated again, this will differ
+        id_frame_2 = np.sum(validcheck.read()[1]) #if interpolated result is interpolated again, this will differ
         id = (path.replace('/','\\').split('\\')[-1], segment_size, id_frame_1, id_frame_2) 
-        #identifies the task params for future
 
         done, history = check_history(id)
         if done:
@@ -537,14 +494,12 @@ def batch_select():
                          f"\n{history[id]}"
                          "\nWould you like to continue anyways? [Y/N]: ")
             if cont.lower() != 'y':
-                continue
+                continue #back to top
 
-        while True: #if not unique then decrease priority by one
-            try:
-                _ = files[segment_size]
-                segment_size +=1
-            except:
-                break
+        while segment_size in files:
+            if fileframes[segment_size][2] == id:
+                break #user has just entered same thing twice, proceed to overwrite
+            segment_size +=  1 #else if not unique then decrease priority by one
 
         files[segment_size] = path
         fileframes[segment_size] = (start_frame, end_frame, id)
@@ -557,7 +512,7 @@ def batch_select():
 def main():
     gflow = InstalledAppFlow.from_client_secrets_file('credentials.json', 
                                                       ['https://www.googleapis.com/auth/drive'])
-    creds = gflow.run_local_server(port=0)
+    creds = gflow.run_local_server(port=0) #OS autoselects port
     drive_service = googleapiclient.discovery.build('drive', 'v3', credentials=creds)
 
     files, fileframes, history = batch_select()
@@ -566,15 +521,14 @@ def main():
     for i in (sort(files))[::-1]:
         projects.push(i)
 
-    pool = Pool() #no limit bc https://stackoverflow.com/a/68790989
+    pool = Pool()
     while not projects.is_empty():
-        print(f'\n(Video {(len(files) - projects.size() + 1)}/{len(files)})')
+        print(f'\n(Video {(len(files) - projects.size() + 1)}/{len(files)})') #improves UX
         print('>>>>>>>>>> ' + files[projects.peek()].replace('/','\\').split('\\')[-1] + ' <<<<<<<<<<\n')
         output = interpolate( files[projects.peek()] , fileframes[projects.peek()] )
 
-        new_result = True if fileframes[projects.peek()][2] not in history else False #id
-        local_storage_status = (new_result, fileframes[projects.pop()][2], history)
-        pool.apply_async(upload, (output, drive_service, local_storage_status))
+        local_storage = (fileframes[projects.pop()][2], history)
+        pool.apply_async(upload, (output, drive_service, local_storage))
                          #submit upload tasks to separate processes without blocking main
 
     pool.close()
@@ -582,8 +536,9 @@ def main():
 
     print(f'\n\nAll done! Find your new file{'s' if len(files) > 1 else ''} in '
           f'{'their' if len(files) > 1 else 'its'} original director{'ies' if len(files) > 1 else 'y'},'
-          f'or download {'them'  if len(files) > 1 else 'it'} at:\n'
-            'https://drive.google.com/drive/folders/1yHeaxE5etil3-XNS6JyXzH5GYzhDwPw4?usp=sharing\n')
+          f'or download {'them'  if len(files) > 1 else 'it'} at one of:\n'
+            '- https://drive.google.com/drive/folders/1yHeaxE5etil3-XNS6JyXzH5GYzhDwPw4?usp=sharing\n'
+            '- https://smolurl.com/N5rF9a\n')
 
 
 

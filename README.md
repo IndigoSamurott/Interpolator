@@ -31,7 +31,7 @@ _The three skill groups A, B and C are in decreasing order of difficulty. Each s
 | File(s) organised for sequential access                   |                                 | <ul><li>[ ] </li></ul>             |
 | Simple scientific/mathematical/robotics/control/business model | Simple user-defined algorithms (e.g., a range of mathematical/statistical calculations) | <ul><li>[x] </li></ul>             |
 | Simple OOP model                                          | Generation of objects based on simple OOP model | <ul><li>[x] </li></ul>             |
-| Simple client-server model                                | Server-side scripting using request and response objects and server-side extensions for a simple client-server model<br>Calling Web service APIs and parsing JSON/XML to service a simple client-server model | <ul><li>[ ] </li></ul>             |
+| Simple client-server model                                | Server-side scripting using request and response objects and server-side extensions for a simple client-server model<br>Calling Web service APIs and parsing JSON/XML to service a simple client-server model | <ul><li>[x] </li></ul>             |
 
 ### Group C
 
