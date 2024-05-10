@@ -510,8 +510,8 @@ def batch_select():
 
 
 def main():
-    gflow = InstalledAppFlow.from_client_secrets_file('credentials.json', 
-                                                      ['https://www.googleapis.com/auth/drive'])
+    gflow = InstalledAppFlow.from_client_secrets_file('client_secrets.json', 
+                                                      ['https://www.googleapis.com/auth/drive']) #download from gcloud console
     creds = gflow.run_local_server(port=0) #OS autoselects port
     drive_service = googleapiclient.discovery.build('drive', 'v3', credentials=creds)
 
